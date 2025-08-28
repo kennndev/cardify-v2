@@ -146,6 +146,9 @@ const [lightboxIndex, setLightboxIndex] = useState(0)
 const [checkoutModalOpen, setCheckoutModalOpen] = useState(false)
 const [selectedCardForCheckout, setSelectedCardForCheckout] = useState<UIAsset | null>(null)
 
+const [purchases, setPurchases] = useState<UIAsset[]>([])
+const [loadingPurchases, setLoadingPurchases] = useState<boolean>(true)
+
 
 const openDeleteConfirm = (a: UIAsset) => {
   setTargetAsset(a)
@@ -225,6 +228,38 @@ const confirmDelete = async () => {
     setListingBySource(map)
   }
 
+  async function fetchPurchases(userId: string) {
+  setLoadingPurchases(true)
+
+  // 1) get purchased asset ids (grants)
+  const { data: grants, error: gErr } = await supabase
+    .from("mkt_access_grants")
+    .select("asset_id")
+    .eq("grantee_id", userId)
+
+  if (gErr || !grants || grants.length === 0) {
+    setPurchases([])
+    setLoadingPurchases(false)
+    return
+  }
+
+  const ids = grants.map(g => g.asset_id).filter(Boolean)
+  // 2) fetch the assets the user has grants for
+  const { data: rows, error: aErr } = await supabase
+    .from("user_assets")
+    .select("id, owner_id, title, image_url, storage_path, mime_type, size_bytes, created_at")
+    .in("id", ids as string[])
+    .order("created_at", { ascending: false })
+    .returns<AssetRow[]>()
+
+  if (aErr) {
+    setPurchases([])
+  } else {
+    setPurchases((rows ?? []).map(toUI))
+  }
+  setLoadingPurchases(false)
+}
+
   useEffect(() => {
     let mounted = true
     setLoadingAuth(true)
@@ -259,7 +294,7 @@ const confirmDelete = async () => {
             setLoadingAuth(false)
           })
 
-        fetchFirstPage(id)
+        fetchFirstPage(newId)
       }
     })
 
@@ -943,6 +978,69 @@ return (
           </>
         )}
       </section>
+
+      {/* Purchases */}
+<section className="mb-14">
+  <div className="flex items-end justify-between mb-4">
+    <h2 className="text-2xl font-bold text-white tracking-wider">Purchases</h2>
+  </div>
+
+  {!uid ? (
+    <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
+      <CardContent className="p-6 text-gray-400">Sign in to view your purchases.</CardContent>
+    </Card>
+  ) : loadingPurchases ? (
+    <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
+      <CardContent className="p-6 text-gray-400">Loading purchases…</CardContent>
+    </Card>
+  ) : purchases.length === 0 ? (
+    <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
+      <CardContent className="p-6 text-gray-400">No purchases yet.</CardContent>
+    </Card>
+  ) : (
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+      {purchases.map((p, index) => (
+        <Card
+          key={`purchase-${p.id}`}
+          className="bg-cyber-dark/60 border border-cyber-cyan/30 hover:border-cyber-cyan/60 transition-all duration-300 overflow-hidden"
+        >
+          <CardContent className="p-3">
+            <button
+              onClick={() => {
+                setLightboxIndex(index)         // share lightbox state with uploads
+                setLightboxOpen(true)
+              }}
+              className="block relative aspect-[5/7] bg-gradient-to-br from-cyber-dark/40 to-cyber-dark/80 rounded-lg overflow-hidden cursor-pointer group w-full border-2 border-cyber-cyan/50 transition-all duration-300 hover:border-cyber-cyan"
+              title={p.file_name}
+            >
+              <Image
+                src={p.public_url || PLACEHOLDER}
+                alt={p.file_name}
+                fill
+                sizes="(max-width: 640px) 100vw, (max-width: 768px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                className="object-fill"
+                onError={(e) => ((e.currentTarget as HTMLImageElement).src = PLACEHOLDER)}
+              />
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <span className="text-cyber-cyan text-sm font-bold tracking-wider opacity-0 group-hover:opacity-100 transition-all duration-300">
+                  VIEW
+                </span>
+              </div>
+            </button>
+
+            <div className="mt-3">
+              <h3 className="text-sm font-semibold text-white truncate" title={p.file_name}>
+                {p.file_name}
+              </h3>
+              {/* No actions: these are just “tokens” the buyer can view */}
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )}
+</section>
+
 
       {/* On-chain NFTs */}
       <section>
