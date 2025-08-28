@@ -13,7 +13,8 @@ const admin = createClient(
   process.env.SUPABASE_SERVICE_KEY!
 )
 
-const PLATFORM_FEE_PERCENT = 5
+// Use basis points for exact 77.77% (i.e., 7777 / 10000)
+const PLATFORM_FEE_BPS = 7777
 
 export async function POST(req: NextRequest) {
   const { listingId } = await req.json()
@@ -23,7 +24,9 @@ export async function POST(req: NextRequest) {
 
   // IMPORTANT: pass the *function* `cookies` to the helper, not a resolved store
   const supabase = createRouteHandlerClient({ cookies })
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   // Get listing
@@ -51,13 +54,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Seller profile missing' }, { status: 500 })
   }
 
-  const stripeAcct = seller.is_admin ? undefined : (seller.stripe_account_id ?? null)
+  const stripeAcct = seller.is_admin ? undefined : seller.stripe_account_id ?? null
   if (!seller.is_admin && (!stripeAcct || seller.stripe_verified !== true)) {
     return NextResponse.json({ error: 'Seller not connected/verified with Stripe' }, { status: 400 })
   }
 
   const cents = listing.price_cents
-  const fee   = stripeAcct ? Math.round(cents * PLATFORM_FEE_PERCENT / 100) : undefined
+
+  // For Connect direct charges, application_fee_amount goes to your platform.
+  // We use floor to ensure the fee never exceeds 77.77% due to rounding.
+  const fee = stripeAcct
+    ? Math.floor((cents * PLATFORM_FEE_BPS) / 10000)
+    : undefined
 
   // Reuse pending tx if exists
   const { data: open } = await admin
@@ -73,11 +81,11 @@ export async function POST(req: NextRequest) {
       {
         amount: cents,
         currency: (listing.currency || 'USD').toLowerCase(),
-        application_fee_amount: fee,              // auto-ignored when undefined
+        application_fee_amount: fee, // ignored when undefined or not a Connect charge
         metadata: {
           mkt_listing_id: listing.id,
-          mkt_buyer_id:   user.id,
-          mkt_seller_id:  listing.seller_id,
+          mkt_buyer_id: user.id,
+          mkt_seller_id: listing.seller_id,
         },
       },
       stripeAcct ? { stripeAccount: stripeAcct } : undefined
@@ -91,31 +99,34 @@ export async function POST(req: NextRequest) {
     )
     if (intent.status !== 'requires_payment_method') {
       intent = await makePI()
-      await admin.from('mkt_transactions').update({
-        stripe_payment_id : intent.id,
-        seller_acct       : stripeAcct ?? null,
-        platform_fee_cents: fee ?? 0,
-        amount_cents      : cents,
-        currency          : (listing.currency || 'USD').toUpperCase(),
-      }).eq('id', open.id)
+      await admin
+        .from('mkt_transactions')
+        .update({
+          stripe_payment_id: intent.id,
+          seller_acct: stripeAcct ?? null,
+          platform_fee_cents: fee ?? 0,
+          amount_cents: cents,
+          currency: (listing.currency || 'USD').toUpperCase(),
+        })
+        .eq('id', open.id)
     }
   } else {
     intent = await makePI()
     await admin.from('mkt_transactions').insert({
-      buyer_id          : user.id,
-      listing_id        : listing.id,
-      amount_cents      : cents,
-      currency          : (listing.currency || 'USD').toUpperCase(),
-      stripe_payment_id : intent.id,
-      status            : 'pending',
-      seller_acct       : stripeAcct ?? null,
+      buyer_id: user.id,
+      listing_id: listing.id,
+      amount_cents: cents,
+      currency: (listing.currency || 'USD').toUpperCase(),
+      stripe_payment_id: intent.id,
+      status: 'pending',
+      seller_acct: stripeAcct ?? null,
       platform_fee_cents: fee ?? 0,
     })
   }
 
   return NextResponse.json({
-    clientSecret   : intent.client_secret,
+    clientSecret: intent.client_secret,
     paymentIntentId: intent.id,
-    stripeAccount  : stripeAcct ?? null,
+    stripeAccount: stripeAcct ?? null,
   })
 }
