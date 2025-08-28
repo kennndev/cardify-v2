@@ -260,68 +260,77 @@ const confirmDelete = async () => {
   setLoadingPurchases(false)
 }
 
-  useEffect(() => {
-    let mounted = true
-    setLoadingAuth(true)
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const id = session?.user?.id ?? null
-      if (!mounted) return
+useEffect(() => {
+  let mounted = true
+  setLoadingAuth(true)
 
-      if (!id) {
-        setUid(null)
-        setAvatarUrl(null)
-        setAssets([])
-        setHasMore(false)
-        setLoadingAssets(false)
-        setLoadingAuth(false)
-        setDisplayName("")
-        setNameLoading(false)
-      } else {
-        setUid(id)
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    const id = session?.user?.id ?? null
+    if (!mounted) return
 
-        // Load avatar + name + stripe in one go
-        supabase
-          .from("mkt_profiles")
-          .select("avatar_url, display_name, stripe_verified, stripe_account_id")
-          .eq("id", id)
-          .single()
-          .then(({ data: prof }) => {
-            setAvatarUrl(prof?.avatar_url ?? session?.user?.user_metadata?.avatar_url ?? null)
-            setDisplayName(prof?.display_name ?? "")
-            setStripeVerified(!!prof?.stripe_verified)
-            setStripeAccount(prof?.stripe_account_id ?? null)
-            setNameLoading(false)
-            setLoadingAuth(false)
-          })
+    if (!id) {
+      setUid(null)
+      setAvatarUrl(null)
+      setAssets([])
+      setHasMore(false)
+      setLoadingAssets(false)
+      setLoadingAuth(false)
+      setDisplayName("")
+      setNameLoading(false)
+    } else {
+      setUid(id)
 
-        fetchFirstPage(newId)
-      }
-    })
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      const newId = s?.user?.id ?? null
-      if (!newId) return
-      setUid(newId)
+      // Load avatar + name + stripe in one go — use maybeSingle() to avoid 406
       supabase
         .from("mkt_profiles")
         .select("avatar_url, display_name, stripe_verified, stripe_account_id")
-        .eq("id", newId)
-        .single()
+        .eq("id", id)
+        .maybeSingle()
         .then(({ data: prof }) => {
-          setAvatarUrl(prof?.avatar_url ?? null)
+          setAvatarUrl(prof?.avatar_url ?? session?.user?.user_metadata?.avatar_url ?? null)
           setDisplayName(prof?.display_name ?? "")
           setStripeVerified(!!prof?.stripe_verified)
           setStripeAccount(prof?.stripe_account_id ?? null)
           setNameLoading(false)
+          setLoadingAuth(false)
         })
-      fetchFirstPage(newId)
-    })
 
-    return () => {
-      if (sub?.subscription) sub.subscription.unsubscribe()
-      if (greetTimeoutRef.current) clearTimeout(greetTimeoutRef.current)
+      // ✅ use id here (newId is not in scope in this branch)
+      fetchFirstPage(id)
+      fetchPurchases(id)
     }
-  }, [])
+  })
+
+  const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+    const newId = s?.user?.id ?? null
+    if (!newId) return
+
+    setUid(newId)
+
+    // Use maybeSingle() here as well
+    supabase
+      .from("mkt_profiles")
+      .select("avatar_url, display_name, stripe_verified, stripe_account_id")
+      .eq("id", newId)
+      .maybeSingle()
+      .then(({ data: prof }) => {
+        setAvatarUrl(prof?.avatar_url ?? null)
+        setDisplayName(prof?.display_name ?? "")
+        setStripeVerified(!!prof?.stripe_verified)
+        setStripeAccount(prof?.stripe_account_id ?? null)
+        setNameLoading(false)
+      })
+
+    fetchFirstPage(newId)
+    fetchPurchases(newId)
+  })
+
+  return () => {
+    sub?.subscription?.unsubscribe?.()
+    if (greetTimeoutRef.current) clearTimeout(greetTimeoutRef.current)
+  }
+}, [])
+
 
   async function fetchFirstPage(userId: string) {
     setLoadingAssets(true)
