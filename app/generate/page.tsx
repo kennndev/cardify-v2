@@ -1,0 +1,1437 @@
+"use client";
+
+import { useState, useCallback, useEffect, useRef } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Navigation } from "@/components/navigation";
+import { FlippableCardPreview } from "@/components/flippable-card-preview";
+import { CustomCardCheckoutModal } from "@/components/custom-card-checkout-modal";
+import { useNavigationVisibility } from "@/hooks/use-navigation-visibility";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Sparkles,
+  RotateCcw,
+  ExternalLink,
+  Zap,
+  Star,
+  Loader2,
+  AlertCircle,
+  ArrowRight,
+  ArrowDown,
+  Wand2,
+  ImageIcon,
+  ShoppingCart,
+  ChevronLeft,
+  ChevronRight,
+  Upload,
+  X,
+} from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  getSupabaseBrowserClient,
+  signInWithGoogle,
+} from "@/lib/supabase-browser";
+import { uploadToSupabase } from "@/lib/supabase-storage";
+import { uploadTempReferenceImage, deleteTempReferenceImage } from "@/lib/supabase-temp-storage";
+
+import { cropImageToAspectRatio } from "@/lib/image-processing";
+
+import { v4 as uuidv4 } from "uuid";
+const DEVICE_STORAGE_KEY = "cardify.device_id";
+
+/** Return a UUID that stays the same for this browser until local-storage is cleared */
+export function getDeviceId(): string {
+  // try localStorage first
+  if (typeof window !== "undefined") {
+    const cached = localStorage.getItem(DEVICE_STORAGE_KEY);
+    if (cached) return cached;
+
+    const fresh = uuidv4();
+    localStorage.setItem(DEVICE_STORAGE_KEY, fresh);
+    return fresh;
+  }
+
+  // SSR – just fallback to a random v4 (won’t be persisted)
+  return uuidv4();
+}
+
+// Frame styles from AI modal
+const FRAME_STYLES = [
+  {
+    id: "none",
+    name: "No Frame",
+    description: "Pure artwork with no frame elements",
+    basePrompt:
+      "Create a full-art card with no frame or border elements, allowing the artwork to fill the entire card.",
+    titleTextPrompt:
+      "Overlay the title text directly on the artwork in a bold, readable font with a subtle shadow or glow effect to ensure visibility against the background.",
+    additionalTextPrompt:
+      "Place additional text in a complementary position with similar styling to maintain readability.",
+    bothTextsPrompt:
+      "Position the title prominently and the additional text as supporting information, both with effects to ensure visibility against the artwork.",
+  },
+  {
+    id: "pokemon",
+    name: "TCG Style",
+    description: "Full-art layout with blue capsule and red header",
+    basePrompt:
+      "Use a full-art Pokémon-style card layout with no distinct border around the artwork. The top left contains a small stage label inside a blue capsule.",
+    titleTextPrompt:
+      "Place the card name in bold white serif font on a dark red rectangular header at the top left. The top right displays HP in bold white text next to a circular energy symbol.",
+    additionalTextPrompt:
+      "Include attack descriptions in clean white sans-serif font directly over the artwork with semi-transparent boxes. The lower portion includes semi-transparent boxes for weakness, resistance, and retreat symbols.",
+    bothTextsPrompt:
+      "Place the card name in bold white serif font on a dark red rectangular header at the top left. The top right displays HP in bold white text next to a circular energy symbol. Use the additional text as attack names and descriptions, placed directly over the artwork in bold black text with energy icons to the left. Attack descriptions in clean white sans-serif font. The lower portion includes semi-transparent boxes for weakness, resistance, and retreat symbols. Flavor text appears in a thin, italicized box in the bottom right corner.",
+  },
+  {
+    id: "magic",
+    name: "Magic Fantasy",
+    description: "Fantasy frame with curved banner and flourishes",
+    basePrompt:
+      "Use a full-art trading card frame inspired by Magic: The Gathering, with no visible borders.",
+    titleTextPrompt:
+      "Place the card name at the top left in a bold serif font, enclosed in a curved, 50% transparent banner. Align mana cost symbols to the top right.",
+    additionalTextPrompt:
+      "Include a wide, rounded 50% transparent textbox in the lower third that varies in size with the amount of text (should be positioned as far down as it can), containing the text in a legible serif font. Show a power/toughness box in the bottom right corner, clearly visible against the art.",
+    bothTextsPrompt:
+      "Place the card name at the top left in a bold serif font, enclosed in a curved, 50% transparent banner. Align mana cost symbols to the top right. Include the additional text as a type line (bold) and rules text in a wide, rounded 50% transparent textbox in the lower third that varies in size with the amount of text (should be positioned as far down as it can). Show a power/toughness box in the bottom right corner, clearly visible against the art.",
+  },
+  {
+    id: "cyberpunk",
+    name: "Cyberpunk Style",
+    description: "Digital interface with circuit borders and HUD elements",
+    basePrompt:
+      "Use a full-art digital trading card frame with a high-tech, cyber interface design. Outline with thin, angular circuit-like borders and corner connectors. Include stylized HUD-style graphical elements in frame corners.",
+    titleTextPrompt:
+      "Display the character name in bold, all-caps text with digital styling, integrated into the cyber interface.",
+    additionalTextPrompt:
+      "Include subtitle text in a matching digital font style, positioned to complement the interface design.",
+    bothTextsPrompt:
+      "Display the title in bold, all-caps text centered near the bottom of the card within the digital interface. Place the additional text as a smaller subtitle below it in matching font style. Integrate both text elements seamlessly with the HUD-style graphical elements and circuit patterns.",
+  },
+];
+
+// Example styles for quick templates
+const EXAMPLE_STYLES = [
+  {
+    id: "fantasy",
+    name: "Fantasy Epic",
+    image: "/fantasy-example-card.webp",
+    fields: {
+      mainCharacter: "a majestic dragon with emerald scales and golden eyes",
+      background: "ancient ruins beneath a starlit sky with floating crystals",
+      frameStyle: "magic",
+      titleText: "Eternal Dragon",
+      additionalText: "Guardian of the Ancient Realm",
+    },
+  },
+  {
+    id: "cyberpunk",
+    name: "Cyberpunk",
+    image: "/cyberpunk-example-card.webp",
+    fields: {
+      mainCharacter: "a neon-lit cyborg assassin with holographic implants",
+      background: "rain-soaked dystopian city with towering holograms",
+      frameStyle: "cyberpunk",
+      titleText: "NEXUS-7",
+      additionalText: "ELITE BOUNTY HUNTER",
+    },
+  },
+  {
+    id: "anime",
+    name: "Anime Hero",
+    image: "/anime-hero-example-card.webp",
+    fields: {
+      mainCharacter:
+        "a determined warrior with flowing silver hair and glowing sword",
+      background: "cherry blossom battlefield with petals swirling in the wind",
+      frameStyle: "pokemon",
+      titleText: "Sakura Blade Master",
+      additionalText: "Swift Strike - 120 damage",
+    },
+  },
+  {
+    id: "horror",
+    name: "Dark Horror",
+    image: "/dark-horror-example-card.webp",
+    fields: {
+      mainCharacter:
+        "a shadowy specter with glowing red eyes emerging from darkness",
+      background: "abandoned mansion under a blood moon with creeping fog",
+      frameStyle: "magic",
+      titleText: "Shadow Wraith",
+      additionalText: "Creature - Spirit Horror",
+    },
+  },
+];
+
+interface PromptFields {
+  mainCharacter: string;
+  background: string;
+  frameStyle: string;
+  titleText: string;
+  additionalText: string;
+}
+
+interface GeneratedImage {
+  id: string;
+  imageUrl: string;
+  prompt: string;
+  timestamp: Date;
+  purchased: boolean;
+}
+
+type ProfileRow = {
+  credits: number | null;
+  free_generations_used: number | null;
+};
+
+const FREE_LIMIT = 3;
+
+export default function GeneratePage() {
+  /* ───────── auth & credits ───────────────── */
+  const [user, setUser] = useState<any>(null);
+  const [credits, setCredits] = useState(0);
+  const [freeGenerationsUsed, setFreeGenerationsUsed] = useState(0);
+
+  /* ── NEW: persistent per-browser id ───────────────────────── */
+  const [deviceId, setDeviceId] = useState<string>("");
+  useEffect(() => {
+    setDeviceId(getDeviceId());
+  }, []);
+
+  const migrateGuestQuota = async (
+    sb: ReturnType<typeof getSupabaseBrowserClient>,
+    userId: string,
+    deviceId: string,
+    row: ProfileRow
+  ): Promise<ProfileRow> => {
+    /* ── how many freebies this device already burned ── */
+    const { data: quota } = await sb
+      .from("guest_quotas")
+      .select("used")
+      .eq("device_id", deviceId)
+      .maybeSingle<{ used: number }>();
+
+    const guestUsed = Number(quota?.used ?? 0);
+    if (guestUsed === 0) return row;
+
+    // ── merge with the user’s profile ──
+    const alreadyUsed = row.free_generations_used ?? 0;
+    const combinedUsage = Math.min(FREE_LIMIT, alreadyUsed + guestUsed);
+
+    if (combinedUsage !== alreadyUsed) {
+      const { data } = await sb
+        .from("mkt_profiles")
+        .update({ free_generations_used: combinedUsage })
+        .eq("id", userId)
+        .select("credits, free_generations_used")
+        .single<ProfileRow>();
+
+      // wipe the guest-quota row so it cannot be re-merged
+      await sb.from("guest_quotas").delete().eq("device_id", deviceId);
+
+      return data ?? row;
+    }
+
+    // still wipe even if nothing changed (prevents replay attacks)
+    await sb.from("guest_quotas").delete().eq("device_id", deviceId);
+    return row;
+  };
+
+  /* ──────────────────────────────────────────────────────────────
+   auth bootstrap + realtime profile listener
+─────────────────────────────────────────────────────────────────*/
+useEffect(() => {
+  const sb = getSupabaseBrowserClient()
+  if (!deviceId) return                
+
+  // bootstrap auth
+  sb.auth.getUser().then(({ data }) => setUser(data.user ?? null))
+  const { data: authSub } =
+    sb.auth.onAuthStateChange((_e, sess) => setUser(sess?.user ?? null))
+
+  return () => authSub.subscription.unsubscribe()
+}, [deviceId])
+
+/** NEW effect that actually loads / merges the profile ------ */
+useEffect(() => {
+  if (!deviceId || !user?.id) return       
+
+  const sb   = getSupabaseBrowserClient()
+  let chan: ReturnType<typeof sb.channel> | null = null
+
+  ;(async () => {
+    const { data } = await sb
+      .from("mkt_profiles")
+      .select("credits, free_generations_used")
+      .eq("id", user.id)
+      .maybeSingle<ProfileRow>()
+
+    const merged = await migrateGuestQuota(
+      sb,
+      user.id,
+      deviceId,
+      data ?? { credits: 0, free_generations_used: 0 },
+    )
+
+    setCredits(Number(merged.credits ?? 0))
+    setFreeGenerationsUsed(Number(merged.free_generations_used ?? 0))
+
+    /* realtime — optional but handy */
+    chan = sb.channel(`profile-${user.id}`).on(
+      "postgres_changes",
+      {
+        event:  "UPDATE",
+        schema: "public",
+        table:  "mkt_profiles",
+        filter: `id=eq.${user.id}`,
+      },
+      ({ new: r }) => {
+        setCredits(Number((r as ProfileRow).credits ?? 0))
+        setFreeGenerationsUsed(Number((r as ProfileRow).free_generations_used ?? 0))
+      }
+    ).subscribe()
+  })()
+
+  return () => { if (chan) sb.removeChannel(chan) }
+}, [deviceId, user?.id])        
+
+  /* ─────────────────────────── guest free quota (3) ────────────────────────── */
+
+  const [remainingGenerations, setRemainingGenerations] = useState(FREE_LIMIT);
+
+  const freebiesLeftDB = Math.max(0, FREE_LIMIT - freeGenerationsUsed); // ⬅️ NEW
+  const guestQuotaLeft = remainingGenerations;
+  const paidCreditsLeft = credits;
+
+  const usableCredits =
+    paidCreditsLeft + (user ? freebiesLeftDB : guestQuotaLeft);
+  const isOutOfCredits = usableCredits <= 0;
+
+  useEffect(() => {
+    if (typeof window === "undefined" || user) return;
+    const saved = Number(
+      localStorage.getItem("cardify.freeGens.v1") ?? FREE_LIMIT
+    );
+    setRemainingGenerations(Math.max(0, saved));
+  }, [user]);
+
+  const isOutOfFreeAndLoggedOut = !user && remainingGenerations <= 0;
+
+  /* ─────────────────────────── builder state (unchanged) ──────────────────── */
+  const [activeTab, setActiveTab] = useState("build");
+
+  const [fields, setFields] = useState<PromptFields>({
+    mainCharacter: "",
+    background: "",
+    frameStyle: "",
+    titleText: "",
+    additionalText: "",
+  });
+
+  const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const [referenceImageName, setReferenceImageName] = useState<string | null>(
+    null
+  );
+  const [referenceImageStoragePath, setReferenceImageStoragePath] = useState<string | null>(null);
+  const [referenceImagePublicUrl, setReferenceImagePublicUrl] = useState<string | null>(null);
+  const [maintainLikeness, setMaintainLikeness] = useState(true);
+  const [isUploadingReference, setIsUploadingReference] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationStartTime, setGenerationStartTime] = useState<number | null>(
+    null
+  );
+  const [generationElapsedTime, setGenerationElapsedTime] = useState(0);
+  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [processedImageBlob, setProcessedImageBlob] = useState<Blob | null>(
+    null
+  );
+  const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [editedPrompt, setEditedPrompt] = useState("");
+
+  const [sessionImages, setSessionImages] = useState<string[]>([]);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+
+  const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [isUploadingToDatabase, setIsUploadingToDatabase] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const freeLeft = user ? freebiesLeftDB : remainingGenerations;
+  const [showExampleHint, setShowExampleHint] = useState(false);
+  useEffect(() => {
+    const hasAnyInput =
+      fields.mainCharacter ||
+      fields.background ||
+      fields.frameStyle ||
+      fields.titleText ||
+      fields.additionalText;
+
+    if (activeTab === "build" && !hasAnyInput) {
+      const timer = setTimeout(() => {
+        setShowExampleHint(true);
+      }, 10000); // Show hint after 10 seconds of inactivity
+
+      return () => {
+        clearTimeout(timer);
+        setShowExampleHint(false);
+      };
+    } else {
+      setShowExampleHint(false);
+    }
+  }, [activeTab, fields]);
+
+  useEffect(() => {
+    setEditedPrompt(getVisiblePrompt());
+  }, [fields]);
+
+  /* ─────────────────────────── helper functions (unchanged) ───────────────── */
+  // Generate the visible prompt (what users see and can edit)
+  const getVisiblePrompt = () => {
+    if (
+      !fields.mainCharacter &&
+      !fields.background &&
+      !fields.frameStyle &&
+      !fields.titleText &&
+      !fields.additionalText
+    ) {
+      return "";
+    }
+
+    let visiblePrompt = "";
+
+    // Add character and background (user visible)
+    if (fields.mainCharacter) {
+      visiblePrompt += `• Main character: ${fields.mainCharacter}\n`;
+    }
+
+    if (fields.background) {
+      visiblePrompt += `• Background: ${fields.background}\n`;
+    }
+
+    // Add frame style name only (not the technical prompt)
+    if (fields.frameStyle) {
+      const selectedFrame = FRAME_STYLES.find(
+        (style) => style.id === fields.frameStyle
+      );
+      if (selectedFrame) {
+        visiblePrompt += `• Card frame style: ${selectedFrame.name}\n`;
+
+        // Add text elements if provided
+        const hasTitle = fields.titleText.trim() !== "";
+        const hasAdditional = fields.additionalText.trim() !== "";
+
+        if (hasTitle) {
+          visiblePrompt += `• Title text: "${fields.titleText}"\n`;
+        }
+        if (hasAdditional) {
+          visiblePrompt += `• Additional text: "${fields.additionalText}"\n`;
+        }
+      }
+    } else {
+      // No frame selected but text might be provided
+      const hasTitle = fields.titleText.trim() !== "";
+      const hasAdditional = fields.additionalText.trim() !== "";
+
+      if (hasTitle) {
+        visiblePrompt += `• Title text: "${fields.titleText}"\n`;
+      }
+      if (hasAdditional) {
+        visiblePrompt += `• Additional text: "${fields.additionalText}"\n`;
+      }
+    }
+
+    return visiblePrompt.trim();
+  };
+
+  // Generate the hidden technical instructions (the "secret sauce")
+  const getHiddenInstructions = () => {
+    let hiddenPrompt =
+      "Create a fully designed, high-resolution trading card image in portrait orientation with an aspect ratio of 2.5:3.5 (standard playing card dimensions).\n";
+
+    // Add facial likeness preservation if reference image exists and toggle is on
+    if (referenceImage && maintainLikeness) {
+      hiddenPrompt +=
+        "IMPORTANT: When using the reference image, preserve the exact facial features, proportions, and distinctive characteristics of the person in the reference image while adapting them to the card's artistic style. Maintain recognizable likeness throughout the transformation.\n";
+    }
+
+    // Add frame technical instructions if a frame is selected
+    if (fields.frameStyle) {
+      const selectedFrame = FRAME_STYLES.find(
+        (style) => style.id === fields.frameStyle
+      );
+      if (selectedFrame) {
+        hiddenPrompt += `Frame implementation: ${selectedFrame.basePrompt}\n`;
+
+        // Add text styling instructions based on what text is provided
+        const hasTitle = fields.titleText.trim() !== "";
+        const hasAdditional = fields.additionalText.trim() !== "";
+
+        if (hasTitle && hasAdditional) {
+          hiddenPrompt += `Text layout: ${selectedFrame.bothTextsPrompt}\n`;
+        } else if (hasTitle) {
+          hiddenPrompt += `Text layout: ${selectedFrame.titleTextPrompt}\n`;
+        } else if (hasAdditional) {
+          hiddenPrompt += `Text layout: ${selectedFrame.additionalTextPrompt}\n`;
+        }
+      }
+    } else if (fields.titleText || fields.additionalText) {
+      // No frame but has text
+      hiddenPrompt +=
+        "Text overlay: Place text directly on the artwork with effects (shadow, glow, or outline) to ensure readability. Title positioned prominently, additional text as supporting information.\n";
+    }
+
+    // 3D breakout effect only if there's a frame
+    if (fields.frameStyle && fields.frameStyle !== "none") {
+      hiddenPrompt +=
+        "Special effect: The character should visually break through the frame, with parts of their body (such as weapon, arm, or cloak) extending past the border to give a 3D effect.\n";
+    }
+
+    hiddenPrompt +=
+      "The final composition should resemble a premium trading card: perfectly centered, clear layout, crisp detail, and layered effects with a dynamic visual style.\n";
+    hiddenPrompt +=
+      "IMPORTANT: Generate the image in a 2.5:3.5 aspect ratio (portrait orientation, like a standard playing card). The image dimensions should be suitable for printing on a physical card.";
+
+    return hiddenPrompt;
+  };
+  // Combine edited visible prompt with hidden instructions for generation
+  const generatePrompt = (editedVisiblePrompt?: string) => {
+    // If no fields are filled, return empty
+    if (
+      !fields.mainCharacter &&
+      !fields.background &&
+      !fields.frameStyle &&
+      !fields.titleText &&
+      !fields.additionalText
+    ) {
+      return "";
+    }
+
+    const hiddenInstructions = getHiddenInstructions();
+    const visiblePart = editedVisiblePrompt || getVisiblePrompt();
+
+    // Combine visible (potentially edited) prompt with hidden technical instructions
+    return `${hiddenInstructions}\n\nCard specifications:\n${visiblePart}`;
+  };
+
+  // Helper function to create a preview URL for display
+  const createPreviewUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        resolve(reader.result as string);
+      };
+      reader.onerror = () => {
+        reject(new Error("Failed to read file"));
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRemoveImage = async () => {
+    // Clean up storage if image was uploaded
+    if (referenceImageStoragePath) {
+      await deleteTempReferenceImage(referenceImageStoragePath);
+    }
+    
+    setReferenceImage(null);
+    setReferenceImageName(null);
+    setReferenceImageStoragePath(null);
+    setReferenceImagePublicUrl(null);
+    setMaintainLikeness(true);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleReset = async () => {
+    // Clean up storage if image was uploaded
+    if (referenceImageStoragePath) {
+      await deleteTempReferenceImage(referenceImageStoragePath);
+    }
+    
+    setFields({
+      mainCharacter: "",
+      background: "",
+      frameStyle: "",
+      titleText: "",
+      additionalText: "",
+    });
+    setEditedPrompt("");
+    setReferenceImage(null);
+    setReferenceImageName(null);
+    setReferenceImageStoragePath(null);
+    setReferenceImagePublicUrl(null);
+    setMaintainLikeness(true); // Reset to default
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  // Handle reference image upload
+  const handleImageUpload = async (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Check file type
+    if (!file.type.startsWith("image/")) {
+      setGenerationError("Please upload an image file");
+      return;
+    }
+
+    // Check file size (max 4MB)
+    if (file.size > 4 * 1024 * 1024) {
+      setGenerationError("Image must be less than 4MB");
+      return;
+    }
+
+    setIsUploadingReference(true);
+    setGenerationError(null);
+
+    try {
+      // Create a preview URL for display
+      const previewUrl = await createPreviewUrl(file);
+      setReferenceImage(previewUrl);
+      setReferenceImageName(file.name);
+      
+      // Upload to Supabase temp storage
+      const { storagePath, publicUrl } = await uploadTempReferenceImage(file, deviceId);
+      setReferenceImageStoragePath(storagePath);
+      setReferenceImagePublicUrl(publicUrl);
+      
+      console.log("Reference image uploaded:", { storagePath, publicUrl });
+    } catch (error) {
+      console.error("Error uploading reference image:", error);
+      setGenerationError(
+        "Failed to upload image. Please try a different image."
+      );
+      setReferenceImage(null);
+      setReferenceImageName(null);
+    } finally {
+      setIsUploadingReference(false);
+    }
+  };
+
+  // Navigation functions for cycling through generated images
+  const handlePreviousImage = () => {
+    if (currentImageIndex > 0) {
+      const newIndex = currentImageIndex - 1;
+      setCurrentImageIndex(newIndex);
+      setGeneratedImage(sessionImages[newIndex]);
+    }
+  };
+
+  const handleNextImage = () => {
+    if (currentImageIndex < sessionImages.length - 1) {
+      const newIndex = currentImageIndex + 1;
+      setCurrentImageIndex(newIndex);
+      setGeneratedImage(sessionImages[newIndex]);
+    }
+  };
+
+  const handleUseTemplate = (template: (typeof EXAMPLE_STYLES)[0]) => {
+    setFields(template.fields);
+    setActiveTab("build");
+    setShowExampleHint(false);
+  };
+
+  const freeQuotaLeft = remainingGenerations;
+  /* REPLACE the whole burnFreeQuota helper */
+const burnFreeQuota = async () => {
+  if (remainingGenerations <= 0 || !deviceId) return
+  setRemainingGenerations(p => {
+    const newVal = p - 1
+    localStorage.setItem("cardify.freeGens.v1", String(newVal))
+    return newVal
+  })
+
+    const sb = getSupabaseBrowserClient();
+    const used = FREE_LIMIT - (remainingGenerations - 1);
+
+    await sb
+      .from("guest_quotas")
+      .upsert({
+        device_id: deviceId,
+        used,
+        last_used: new Date().toISOString(),
+      });
+  };
+
+  /* ─────────── generate card ─────────── */
+
+const handleGenerate = async () => {
+  const supabase = getSupabaseBrowserClient();
+
+  // ─── quota preflight (UI-only) ───
+  const paidCreditsLeft  = credits;                         // from DB
+  const dbFreebiesLeft   = Math.max(0, FREE_LIMIT - freeGenerationsUsed);
+  const guestQuotaLeft   = remainingGenerations;            // local for guests
+
+  if (!user) {
+    if (guestQuotaLeft <= 0) {
+      signInWithGoogle("/generate");
+      return;
+    }
+  } else if (paidCreditsLeft <= 0 && dbFreebiesLeft <= 0) {
+    // UX guard only; the DB trigger will enforce anyway
+    window.location.href = "/credits";
+    return;
+  }
+
+  // ─── prompt guard ───
+  const prompt = generatePrompt(editedPrompt);
+  if (!prompt && !referenceImage) {
+    setGenerationError("Fill at least one field or upload an image");
+    return;
+  }
+
+  // ─── UI state ───
+  setIsGenerating(true);
+  setGenerationStartTime(Date.now());
+  setGenerationError(null);
+
+  try {
+    // ─── call image API ───
+    const body: any = {
+      prompt,
+      // if you switched to URL-based temp reference, pass it here:
+      referenceImageUrl: referenceImagePublicUrl ?? undefined,
+      maintainLikeness,
+    };
+    if (!referenceImagePublicUrl && referenceImage) {
+      // legacy base64 fallback if present
+      body.referenceImage = referenceImage;
+    }
+
+    const res  = await fetch("/api/generate-image", {
+      method : "POST",
+      headers: { "Content-Type": "application/json" },
+      body   : JSON.stringify(body),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      if (data.code === "RATE_LIMIT_EXCEEDED") {
+        setGenerationError(
+          user ? "OpenAI rate-limit hit — wait a minute"
+               : "Rate limit hit — please sign in."
+        );
+        if (!user) setRemainingGenerations(0);
+      } else {
+        setGenerationError(data.error || "Failed to generate image");
+      }
+      return;
+    }
+
+    // ─── show in-session preview ───
+    setGeneratedImage(data.imageUrl);
+    const imgs = [...sessionImages, data.imageUrl];
+    setSessionImages(imgs);
+    setCurrentImageIndex(imgs.length - 1);
+
+    // ─── Optional: burn one guest free slot (guests only, UI bookkeeping) ───
+    if (!user) {
+      await burnFreeQuota();
+    }
+
+    // ─── upload to Storage + DB (auth users only) ───
+    if (user) {
+      setIsUploadingToDatabase(true);
+      setUploadError(null);
+
+      try {
+        const blob    = await fetch(data.imageUrl).then(r => r.blob());
+        const cropped = await cropImageToAspectRatio(
+          new File([blob], "card.png", { type: blob.type })
+        );
+        setProcessedImageBlob(cropped);
+
+        // IMPORTANT: mark this as an AI generation so the trigger can decide
+        const { publicUrl } = await uploadToSupabase(
+          cropped,
+          undefined,
+          { metadata: { is_ai_generation: true } }
+        );
+
+        setUploadedImageUrl(publicUrl);
+      } catch (e: any) {
+        console.error("Upload failed:", e);
+        setUploadError("Upload failed — image won’t be purchasable");
+      } finally {
+        setIsUploadingToDatabase(false);
+      }
+    }
+  } catch (err: any) {
+    setGenerationError(err.message || "Unknown error");
+  } finally {
+    setIsGenerating(false);
+    setGenerationStartTime(null);
+    setGenerationElapsedTime(0);
+  }
+};
+
+
+  /* ─────────── finalize card ─────────── */
+  const handleFinalizeClick = async () => {
+    if (!user) return signInWithGoogle("/generate");
+
+    const currentImage = sessionImages.length
+      ? sessionImages[currentImageIndex]
+      : generatedImage;
+    if (!currentImage) return;
+
+    /* If the image was already uploaded during generate, simply open checkout. 
+     Otherwise (should only happen in edge cases), fall back to upload flow. */
+    if (uploadedImageUrl) {
+      setShowCheckoutModal(true);
+      return;
+    }
+
+    setIsUploadingToDatabase(true);
+    setUploadError(null);
+
+    try {
+      const blob = await fetch(currentImage).then((r) => r.blob());
+      const cropped = await cropImageToAspectRatio(
+        new File([blob], "card.png", { type: blob.type })
+      );
+      setProcessedImageBlob(cropped);
+
+      const { publicUrl } = await uploadToSupabase(cropped);
+      setUploadedImageUrl(publicUrl);
+      setShowCheckoutModal(true);
+    } catch (e: any) {
+      setUploadError("Failed to prepare image for checkout");
+    } finally {
+      setIsUploadingToDatabase(false);
+    }
+  };
+
+  /* ─────────────────────── generate/finalize enable flags ─────────────────── */
+  const hasPrompt = editedPrompt.trim() !== "" || getVisiblePrompt() !== "";
+
+  const generateBtnEnabled = hasPrompt && !isGenerating && usableCredits > 0;
+
+  const remainingFree = user ? freebiesLeftDB : remainingGenerations;
+
+  return (
+    <div className="min-h-screen bg-cyber-black relative overflow-hidden font-mono">
+      {/* ────── background scan-lines & grid ────── */}
+      <div className="fixed inset-0 cyber-grid opacity-10 pointer-events-none" />
+      <div className="fixed inset-0 scanlines  opacity-20 pointer-events-none" />
+
+      <Navigation />
+
+      {/* ────── checkout modal (opens after finalize) ────── */}
+      <CustomCardCheckoutModal
+        isOpen={showCheckoutModal}
+        onClose={() => setShowCheckoutModal(false)}
+        uploadedImage={
+          sessionImages.length
+            ? sessionImages[currentImageIndex]
+            : generatedImage
+        }
+        processedImageBlob={processedImageBlob}
+        uploadedImageUrl={uploadedImageUrl}
+      />
+
+      {/* ────── page body ────── */}
+      <div className="px-4 sm:px-6 py-8 pt-24 relative">
+        <div className="max-w-7xl mx-auto">
+          {/* ───────────── header ───────────── */}
+          <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold text-white mb-2 tracking-wider">
+                AI Card Generator
+              </h1>
+              <p className="text-gray-400">
+                Create stunning AI-powered trading cards
+              </p>
+            </div>
+
+            {/* free-guest counter (hidden when signed-in) */}
+            <div className="flex items-center gap-3 bg-cyber-dark/60 backdrop-blur-sm border border-cyber-cyan/30 rounded-lg px-4 py-2 select-none">
+              <span className="text-sm text-gray-400">
+                Free&nbsp;Generations:
+              </span>
+
+              <div className="flex gap-1">
+                {[1, 2, 3].map((i) => (
+                  <div
+                    key={i}
+                    className={`w-3 h-3 rounded-full transition-colors
+              ${
+                i <= freeLeft
+                  ? "bg-cyber-cyan shadow-[0_0_8px_rgba(0,255,255,0.5)]"
+                  : "bg-gray-600"
+              }`}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* ───────────── main grid ───────────── */}
+          <div className="grid lg:grid-cols-5 gap-4 sm:gap-6 lg:gap-8">
+            {/* ─────────── prompt builder (left) ─────────── */}
+            <div className="lg:col-span-3">
+              <Card className="bg-cyber-dark/60 backdrop-blur-sm border border-cyber-cyan/30 h-full flex flex-col">
+                <CardHeader className="pb-4">
+                  <CardTitle className="text-white flex items-center gap-2 tracking-wider text-lg">
+                    <Wand2 className="w-5 h-5 text-cyber-cyan" />
+                    AI Card Generator
+                  </CardTitle>
+                </CardHeader>
+
+                <CardContent className="p-4 sm:p-6 pt-0 flex-1 flex flex-col">
+                  {/* ---------- tabs (Build | Examples) ---------- */}
+                  <Tabs
+                    value={activeTab}
+                    onValueChange={setActiveTab}
+                    className="flex-1 flex flex-col"
+                  >
+                    {/* sliding tab header */}
+                    <div className="relative">
+                      {/* Desktop hint - above tabs on right */}
+                      {showExampleHint && (
+                        <div
+                          className="hidden sm:flex absolute -top-14 right-0 w-1/2 flex-col items-center pointer-events-none z-20"
+                          style={{
+                            animation:
+                              "fadeInFloat .5s ease-out forwards, float 2s ease-in-out .5s infinite",
+                          }}
+                        >
+                          <div className="px-3 py-1 bg-cyber-dark/95 backdrop-blur-sm border border-cyber-cyan/50 rounded-full mb-1">
+                            <p className="text-cyber-cyan text-xs font-semibold text-center">
+                              Need ideas?
+                            </p>
+                          </div>
+                          <ArrowDown className="w-5 h-5 text-cyber-cyan drop-shadow-[0_0_8px_rgba(0,255,255,.5)]" />
+                        </div>
+                      )}
+
+                      {/* Mobile hint - below tabs centered under Examples */}
+                      {showExampleHint && (
+                        <div
+                          className="sm:hidden absolute -bottom-14 right-0 w-1/2 flex flex-col items-center pointer-events-none z-20"
+                          style={{
+                            animation:
+                              "fadeInFloat .5s ease-out forwards, floatUpDown 3s ease-in-out .5s infinite",
+                          }}
+                        >
+                          <svg 
+                            className="w-5 h-5 text-cyber-cyan drop-shadow-[0_0_8px_rgba(0,255,255,.5)] mb-1 rotate-180"
+                            fill="none" 
+                            stroke="currentColor" 
+                            viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                          </svg>
+                          <div className="px-3 py-1 bg-cyber-dark/95 backdrop-blur-sm border border-cyber-cyan/50 rounded-full">
+                            <p className="text-cyber-cyan text-xs font-semibold text-center">
+                              Need ideas?
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="relative p-1 bg-transparent border border-cyber-cyan/30 rounded-lg overflow-hidden">
+                        <div
+                          className="absolute top-1 left-1 h-[calc(100%-8px)] w-[calc(50%-6px)] bg-cyber-cyan rounded transition-transform duration-300 ease-in-out"
+                          style={{
+                            transform:
+                              activeTab === "build"
+                                ? "translateX(0)"
+                                : "translateX(calc(100% + 4px))",
+                          }}
+                        />
+                        <TabsList className="relative grid w-full grid-cols-2 bg-transparent border-0 p-0">
+                          <TabsTrigger
+                            value="build"
+                            className="relative z-10 font-bold tracking-wider transition-colors duration-300
+                            data-[state=active]:text-cyber-black data-[state=inactive]:text-gray-400
+                            data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                          >
+                            <span className="sm:hidden">Build Card</span>
+                            <span className="hidden sm:inline">
+                              Build Your Card
+                            </span>
+                          </TabsTrigger>
+                          <TabsTrigger
+                            value="examples"
+                            className="relative z-10 font-bold tracking-wider transition-colors duration-300
+                            data-[state=active]:text-cyber-black data-[state=inactive]:text-gray-400
+                            data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                          >
+                            <span className="sm:hidden">Examples</span>
+                            <span className="hidden sm:inline">
+                              Example Styles
+                            </span>
+                          </TabsTrigger>
+                        </TabsList>
+                      </div>
+                    </div>
+
+                    <TabsContent
+                      value="build"
+                      className="flex-1 flex flex-col space-y-4 mt-6"
+                    >
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="space-y-2">
+                            <Label className="text-cyber-cyan tracking-wide">
+                              Reference Image
+                            </Label>
+                            <div
+                              className="relative transition-all duration-500 rounded-md animate-subtle-pulse-mobile"
+                            >
+                              <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept="image/*"
+                                onChange={handleImageUpload}
+                                className="hidden"
+                                id="reference-image-upload"
+                              />
+                              {!referenceImage ? (
+                                <label
+                                  htmlFor="reference-image-upload"
+                                  className="flex items-center justify-center gap-2 h-10 px-3 bg-cyber-darker/50 border border-cyber-cyan/30 rounded-md cursor-pointer hover:bg-cyber-darker/70 hover:border-cyber-cyan transition-colors"
+                                >
+                                  {isUploadingReference ? (
+                                    <>
+                                      <Loader2 className="w-4 h-4 text-cyber-cyan animate-spin" />
+                                      <span className="text-xs text-gray-400">
+                                        Uploading...
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Upload className="w-4 h-4 text-cyber-cyan" />
+                                      <span className="text-xs text-gray-400">
+                                        Upload
+                                      </span>
+                                    </>
+                                  )}
+                                </label>
+                              ) : (
+                                <div className="flex items-center gap-2 h-10 px-3 bg-cyber-cyan/10 border border-cyber-cyan/50 rounded-md">
+                                  <ImageIcon className="w-4 h-4 text-cyber-cyan flex-shrink-0" />
+                                  <span
+                                    className="text-xs text-cyber-cyan truncate"
+                                    title={
+                                      referenceImageName || "Image uploaded"
+                                    }
+                                  >
+                                    {referenceImageName
+                                      ? referenceImageName.length > 8
+                                        ? `${referenceImageName.substring(
+                                            0,
+                                            8
+                                          )}...`
+                                        : referenceImageName
+                                      : "Uploaded"}
+                                  </span>
+                                  <div className="flex items-center gap-2 ml-auto">
+                                    {/* Inline likeness toggle switch */}
+                                    <label className="flex items-center gap-1.5 cursor-pointer">
+                                      <span className="hidden sm:inline text-xs text-gray-300 select-none whitespace-nowrap">
+                                        Keep likeness
+                                      </span>
+                                      <span className="sm:hidden text-xs text-gray-300 select-none">
+                                        Likeness
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setMaintainLikeness(!maintainLikeness)
+                                        }
+                                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none ${
+                                          maintainLikeness
+                                            ? "bg-cyber-cyan shadow-[0_0_10px_rgba(0,255,255,0.5)]"
+                                            : "bg-cyber-darker border border-cyber-cyan/30"
+                                        }`}
+                                      >
+                                        <span
+                                          className={`inline-block h-3.5 w-3.5 transform rounded-full transition-transform duration-200 ${
+                                            maintainLikeness
+                                              ? "translate-x-[18px] bg-cyber-black shadow-[0_0_8px_rgba(0,0,0,0.3)]"
+                                              : "translate-x-1 bg-gray-500"
+                                          }`}
+                                        />
+                                      </button>
+                                    </label>
+                                    <div className="w-px h-4 bg-cyber-cyan/30" />
+                                    <button
+                                      onClick={handleRemoveImage}
+                                      className="text-cyber-pink hover:text-cyber-pink/80 transition-colors"
+                                      type="button"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label
+                              htmlFor="title-text"
+                              className="text-cyber-cyan tracking-wide"
+                            >
+                              Title Text
+                            </Label>
+                            <Input
+                              id="title-text"
+                              placeholder="e.g., Eternal Dragon, NEXUS-7"
+                              value={fields.titleText}
+                              onChange={(e) =>
+                                setFields({
+                                  ...fields,
+                                  titleText: e.target.value,
+                                })
+                              }
+                              className="bg-cyber-darker/50 border-cyber-cyan/30 text-white placeholder:text-gray-500 focus:border-cyber-cyan"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label
+                            htmlFor="main-character"
+                            className="text-cyber-cyan tracking-wide"
+                          >
+                            Main Character Description
+                          </Label>
+                          <Input
+                            id="main-character"
+                            placeholder="e.g., a frost-covered samurai with glowing blue eyes"
+                            value={fields.mainCharacter}
+                            onChange={(e) =>
+                              setFields({
+                                ...fields,
+                                mainCharacter: e.target.value,
+                              })
+                            }
+                            className="bg-cyber-darker/50 border-cyber-cyan/30 text-white placeholder:text-gray-500 focus:border-cyber-cyan"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label
+                            htmlFor="background"
+                            className="text-cyber-cyan tracking-wide"
+                          >
+                            Background Setting
+                          </Label>
+                          <Input
+                            id="background"
+                            placeholder="e.g., a frozen battlefield under a pale moon"
+                            value={fields.background}
+                            onChange={(e) =>
+                              setFields({
+                                ...fields,
+                                background: e.target.value,
+                              })
+                            }
+                            className="bg-cyber-darker/50 border-cyber-cyan/30 text-white placeholder:text-gray-500 focus:border-cyber-cyan"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label
+                            htmlFor="frame-style"
+                            className="text-cyber-cyan tracking-wide"
+                          >
+                            Card Frame Style
+                          </Label>
+                          <Select
+                            value={fields.frameStyle}
+                            onValueChange={(value) =>
+                              setFields({ ...fields, frameStyle: value })
+                            }
+                          >
+                            <SelectTrigger className="bg-cyber-darker/50 border-cyber-cyan/30 text-white hover:bg-cyber-darker/70 hover:border-cyber-cyan focus:border-cyber-cyan transition-colors">
+                              <SelectValue placeholder="Select a frame style" />
+                            </SelectTrigger>
+                            <SelectContent className="bg-cyber-dark border-cyber-cyan/30 max-w-[90vw] sm:max-w-md">
+                              {FRAME_STYLES.map((style) => (
+                                <SelectItem
+                                  key={style.id}
+                                  value={style.id}
+                                  className="text-white hover:bg-cyber-cyan/20 [&_svg]:data-[state=checked]:text-cyber-black"
+                                >
+                                  <div className="pr-2">
+                                    <div className="font-semibold">
+                                      {style.name}
+                                    </div>
+                                    <div className="text-xs text-gray-400 whitespace-normal break-words">
+                                      {style.description}
+                                    </div>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label
+                            htmlFor="additional-text"
+                            className="text-cyber-cyan tracking-wide"
+                          >
+                            Additional Text
+                          </Label>
+                          <Input
+                            id="additional-text"
+                            placeholder="e.g., Guardian of the Ancient Realm, Creature - Dragon"
+                            value={fields.additionalText}
+                            onChange={(e) =>
+                              setFields({
+                                ...fields,
+                                additionalText: e.target.value,
+                              })
+                            }
+                            className="bg-cyber-darker/50 border-cyber-cyan/30 text-white placeholder:text-gray-500 focus:border-cyber-cyan"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Generated Prompt */}
+                      <div className="flex-1 flex flex-col space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-cyber-pink tracking-wide flex items-center gap-2">
+                            <Sparkles className="w-4 h-4" />
+                            Card Prompt
+                          </Label>
+                          <Button
+                            onClick={handleReset}
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-gray-400 hover:bg-gray-800"
+                          >
+                            <RotateCcw className="w-3 h-3 mr-1" />
+                            Reset
+                          </Button>
+                        </div>
+                        <Textarea
+                          value={
+                            editedPrompt ||
+                            "Fill in the fields above to generate your prompt..."
+                          }
+                          onChange={(e) => setEditedPrompt(e.target.value)}
+                          placeholder="Edit your prompt here..."
+                          className="flex-1 bg-cyber-darker/50 border-cyber-pink/30 text-white font-mono text-xs resize-none min-h-[120px] focus:border-cyber-pink"
+                        />
+                      </div>
+
+                      {/* ---------- generate button ---------- */}
+                      <Button
+                        onClick={handleGenerate}
+                        disabled={!generateBtnEnabled || isOutOfCredits}
+                        className={`w-full text-lg py-6 tracking-wider transition-all duration-300 ${
+                          generateBtnEnabled
+                            ? "cyber-button"
+                            : "bg-gray-800 border-2 border-gray-600 text-gray-500 opacity-50"
+                        }`}
+                        title={
+                          isOutOfFreeAndLoggedOut
+                            ? "Sign in to continue"
+                            : undefined
+                        }
+                      >
+                        {isGenerating ? (
+                          <>
+                            <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                            Generating…
+                          </>
+                        ) : isOutOfFreeAndLoggedOut ? (
+                          <>
+                            <AlertCircle className="w-5 h-5 mr-2" />
+                            Sign in to continue
+                          </>
+                        ) : isOutOfCredits ? (
+                          <>
+                            <ShoppingCart className="w-5 h-5 mr-2" />
+                            Buy Credits
+                          </>
+                        ) : user ? (
+                          <>
+                            <Wand2 className="w-5 h-5 mr-2" />
+                            <span className="hidden sm:inline">
+                              {paidCreditsLeft === 0 && freebiesLeftDB > 0
+                                ? `Generate Card (${remainingFree} left)`
+                                : "Generate Card"}
+                            </span>
+                            <span className="sm:hidden">Generate Card</span>
+                          </>
+                        ) : (
+                          <>
+                            <Wand2 className="w-5 h-5 mr-2" />
+                            <span className="hidden sm:inline">{`Generate Card (${remainingFree} left)`}</span>
+                            <span className="sm:hidden">Generate Card</span>
+                          </>
+                        )}
+                      </Button>
+
+                      {generationError && (
+                        <div className="mt-2 text-xs text-red-400 bg-red-900/20 border border-red-400/30 rounded p-2">
+                          <AlertCircle className="w-3 h-3 inline mr-1" />
+                          {generationError}
+                        </div>
+                      )}
+                    </TabsContent>
+                    <TabsContent value="examples" className="flex-1 mt-6">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {EXAMPLE_STYLES.map((example) => (
+                          <Card
+                            key={example.id}
+                            className="bg-cyber-darker/50 border-cyber-cyan/30 overflow-hidden cursor-pointer group transition-all duration-300 hover:border-cyber-cyan hover:bg-cyber-darker/70"
+                            onClick={() => handleUseTemplate(example)}
+                          >
+                            <div className="p-4">
+                              <div className="aspect-[2.5/3.5] bg-cyber-darker/80 relative flex items-center justify-center rounded-2xl overflow-hidden border-2 border-cyber-cyan/50 transition-all duration-300 group-hover:border-cyber-cyan group-hover:scale-[1.02]">
+                                <img
+                                  src={example.image}
+                                  alt={example.name}
+                                  className="w-full h-full object-fill transition-all duration-300 group-hover:brightness-110"
+                                />
+                              </div>
+                            </div>
+                            <CardContent className="px-4 pt-0 pb-4">
+                              <p className="text-xs text-gray-400 mb-2 text-center transition-colors duration-300 group-hover:text-cyber-cyan">
+                                {example.name}
+                              </p>
+                              <Button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleUseTemplate(example);
+                                }}
+                                className="w-full cyber-button text-sm py-2 transition-all duration-300 group-hover:border-cyber-cyan group-hover:bg-cyber-cyan"
+                              >
+                                Use This Style
+                              </Button>
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    </TabsContent>
+                  </Tabs>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* ─────────── preview / finalize (right) ─────────── */}
+            <div className="lg:col-span-2">
+              <Card className="bg-cyber-dark/60 backdrop-blur-sm border border-cyber-cyan/30 h-full flex flex-col">
+                <CardHeader>
+                  <CardTitle className="text-white tracking-wider flex items-center justify-between">
+                    <span>Card Preview</span>
+                    {sessionImages.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={handlePreviousImage}
+                          disabled={currentImageIndex === 0}
+                          className="h-7 w-7 p-0 text-cyber-cyan hover:bg-cyber-cyan/20 disabled:opacity-30"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </Button>
+                        <span className="text-xs text-gray-400 font-normal min-w-[40px] text-center">
+                          {currentImageIndex + 1} / {sessionImages.length}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleNextImage}
+                          disabled={
+                            currentImageIndex === sessionImages.length - 1
+                          }
+                          className="h-7 w-7 p-0 text-cyber-cyan hover:bg-cyber-cyan/20 disabled:opacity-30"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    )}
+                  </CardTitle>
+                  <p className="text-gray-400 text-sm">
+                    {generatedImage
+                      ? "Your generated card"
+                      : "Fill in the fields and generate your custom card"}
+                  </p>
+                </CardHeader>
+
+                <CardContent className="flex-1 flex flex-col p-4 sm:p-6 pt-0">
+                  <div className="flex-1 flex items-center justify-center">
+                    <FlippableCardPreview
+                      artwork={generatedImage}
+                      isLoading={isGenerating}
+                    />
+                  </div>
+
+                  {/* ---------- finalize button ---------- */}
+                  <div className="mt-6 space-y-3">
+                    <Button
+                      onClick={handleFinalizeClick}
+                      disabled={
+                        (!generatedImage && sessionImages.length === 0) ||
+                        isUploadingToDatabase
+                      }
+                      className={`w-full text-lg py-6 tracking-wider transition-all duration-300 ${
+                        generatedImage || sessionImages.length
+                          ? "cyber-button"
+                          : "bg-gray-800 opacity-50"
+                      }`}
+                    >
+                      {isUploadingToDatabase ? (
+                        <>
+                          <Loader2 className="w-5 h-5 mr-2 animate-spin text-cyber-cyan" />
+                          Preparing…
+                        </>
+                      ) : (
+                        <>
+                          Finalize
+                          <ArrowRight className="w-5 h-5 ml-2" />
+                        </>
+                      )}
+                    </Button>
+
+                    {uploadError && (
+                      <div className="text-xs text-red-400 bg-red-900/20 border border-red-400/30 rounded p-2">
+                        <AlertCircle className="w-3 h-3 inline mr-1" />
+                        {uploadError}
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ───────────── footer ───────────── */}
+      <footer className="px-4 sm:px-6 py-8 mt-16 border-t border-cyber-cyan/20 bg-cyber-dark/40">
+        <div className="max-w-6xl mx-auto text-center">
+          <p className="text-sm text-gray-400">
+            © {new Date().getFullYear()} Cardify. All rights reserved.
+          </p>
+        </div>
+      </footer>
+    </div>
+  );
+}
