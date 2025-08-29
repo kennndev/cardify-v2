@@ -670,13 +670,14 @@ const burnFreeQuota = async () => {
       });
   };
 
-  /* ─────────── generate card ─────────── */
-
+// ─────────────────────────────────────────────────────────────
+// handleGenerate – with explicit `source_type` metadata
+// ─────────────────────────────────────────────────────────────
 const handleGenerate = async (): Promise<void> => {
   const supabase = getSupabaseBrowserClient();
   const t0 = performance.now();
 
-  // ─── quota preflight (UI-only) ───
+  /* ─── quota pre-flight (UI only) ─────────────────────────── */
   const paidCreditsLeft = Number(credits);
   const dbFreebiesLeft  = Math.max(0, FREE_LIMIT - Number(freeGenerationsUsed));
   const guestQuotaLeft  = Number(remainingGenerations);
@@ -701,7 +702,7 @@ const handleGenerate = async (): Promise<void> => {
     return;
   }
 
-  // ─── prompt guard ───
+  /* ─── build prompt guard ─────────────────────────────────── */
   const prompt = generatePrompt(editedPrompt);
   if (!prompt && !referenceImage) {
     setGenerationError("Fill at least one field or upload an image");
@@ -709,85 +710,61 @@ const handleGenerate = async (): Promise<void> => {
     return;
   }
 
-  // ─── UI state ───
+  /* ─── UI state ───────────────────────────────────────────── */
   setIsGenerating(true);
   setGenerationStartTime(Date.now());
   setGenerationError(null);
 
   try {
-    // ─── call image API ───
+    /* ─── 1) hit /api/generate-image ───────────────────────── */
     const body: {
       prompt: string;
       maintainLikeness: boolean;
       referenceImageUrl?: string;
-      referenceImage?: string; // legacy base64 fallback
+      referenceImage?: string;
     } = {
       prompt,
       maintainLikeness: !!maintainLikeness,
     };
 
-    if (referenceImagePublicUrl) {
-      body.referenceImageUrl = referenceImagePublicUrl;
-    } else if (referenceImage) {
-      body.referenceImage = referenceImage;
-    }
+    if (referenceImagePublicUrl) body.referenceImageUrl = referenceImagePublicUrl;
+    else if (referenceImage)     body.referenceImage     = referenceImage;
 
     await track("generate", { action: "request_start" });
 
-    const res = await fetch("/api/generate-image", {
-      method: "POST",
+    const res  = await fetch("/api/generate-image", {
+      method : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body   : JSON.stringify(body),
     });
+    const json = (await res.json()) as { imageUrl?: string; error?: string; code?: string };
 
-    // ---- Properly typed response handling ----
-    type GenSuccess = { imageUrl: string };
-    type GenError   = { error?: string; code?: string };
-    type GenResponse = GenSuccess | GenError;
-
-    const isGenSuccess = (x: unknown): x is GenSuccess =>
-      !!x && typeof (x as any).imageUrl === "string";
-
-    let json: unknown;
-    try {
-      json = await res.json();
-    } catch {
-      json = { error: "Malformed response" } as GenError;
-    }
-
-    if (!res.ok || !isGenSuccess(json)) {
-      const err = (json as GenError) ?? {};
+    if (!res.ok || !json.imageUrl) {
       await track("generate", {
-        action: "request_error",
-        status: res.status,
-        code: err.code ?? null,
-        message: err.error ?? "Unknown error",
+        action : "request_error",
+        status : res.status,
+        code   : json.code  ?? null,
+        message: json.error ?? "Unknown error",
       });
-
-      if (err.code === "RATE_LIMIT_EXCEEDED") {
-        setGenerationError(user ? "OpenAI rate-limit hit — wait a minute" : "Rate limit hit — please sign in.");
-        if (!user) setRemainingGenerations(0);
-      } else {
-        setGenerationError(err.error || "Failed to generate image");
-      }
+      setGenerationError(json.error || "Failed to generate image");
+      if (json.code === "RATE_LIMIT_EXCEEDED" && !user) setRemainingGenerations(0);
       return;
     }
 
-    // success path
+    /* ─── 2) preview image in UI ───────────────────────────── */
     const { imageUrl } = json;
     setGeneratedImage(imageUrl);
-    const imgs = [...sessionImages, imageUrl];
-    setSessionImages(imgs);
-    setCurrentImageIndex(imgs.length - 1);
+    setSessionImages((prev) => [...prev, imageUrl]);
+    setCurrentImageIndex((idx) => idx + 1);
     await track("generate", { action: "preview_ready" });
 
-    // Guest: burn one free slot (UI bookkeeping)
+    /* ─── 3) burn guest quota if required ──────────────────── */
     if (!user) {
       await burnFreeQuota();
       await track("generate", { action: "guest_quota_burned" });
     }
 
-    // Auth: upload to Storage + DB
+    /* ─── 4) signed-in: upload to Storage + DB ─────────────── */
     if (user) {
       setIsUploadingToDatabase(true);
       setUploadError(null);
@@ -795,22 +772,27 @@ const handleGenerate = async (): Promise<void> => {
       try {
         await track("generate", { action: "upload_start" });
 
-        const blob = await fetch(imageUrl).then(r => r.blob());
-        const file = new File([blob], "card.png", { type: blob.type });
-        const cropped = await cropImageToAspectRatio(file);
+        const blob     = await fetch(imageUrl).then((r) => r.blob());
+        const file     = new File([blob], "card.png", { type: blob.type });
+        const cropped  = await cropImageToAspectRatio(file);
         setProcessedImageBlob(cropped);
 
+        //  ⚑  *NEW*: explicit `source_type` alongside the flag
         const { publicUrl } = await uploadToSupabase(
           cropped,
           undefined,
-          { metadata: { is_ai_generation: true } }
+          {
+            metadata: {
+              is_ai_generation: true,          // trigger picks this up
+              source_type: "ai_generation",    // nice to have in JSON for audits
+            },
+          },
         );
 
         setUploadedImageUrl(publicUrl);
         await track("generate", { action: "upload_ok" });
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error("Upload failed:", e);
         setUploadError("Upload failed — image won’t be purchasable");
         await track("generate", { action: "upload_fail", message: msg });
       } finally {
@@ -822,13 +804,16 @@ const handleGenerate = async (): Promise<void> => {
     setGenerationError(msg || "Unknown error");
     await track("generate", { action: "unexpected_error", message: msg });
   } finally {
-    const duration_ms = Math.round(performance.now() - t0);
-    await track("generate", { action: "done", duration_ms });
+    await track("generate", {
+      action      : "done",
+      duration_ms : Math.round(performance.now() - t0),
+    });
     setIsGenerating(false);
     setGenerationStartTime(null);
     setGenerationElapsedTime(0);
   }
 };
+
 
 
   /* ─────────── finalize card ─────────── */
