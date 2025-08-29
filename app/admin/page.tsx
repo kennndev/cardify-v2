@@ -4,197 +4,163 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 export const dynamic = "force-dynamic"
 
-/* ──────────────────────────────────────────────── */
-/* Supabase (service-role – read-only bypass RLS)   */
-/* ──────────────────────────────────────────────── */
-function getAdminClient() {
+/* ───── Supabase (service role) ───── */
+function getAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const key = process.env.SUPABASE_SERVICE_KEY!
-  if (!url || !key) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_KEY")
+  if (!url || !key) throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_KEY")
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-/* ──────────────────────────────────────────────── */
-/* Types                                           */
-/* ──────────────────────────────────────────────── */
-type EventRow = {
+/* ───── Types ───── */
+type Row = {
   ts: string | null
   name: string
   user_id: string | null
   device_id: string | null
-  session_id: string | null
   props: Record<string, any> | null
 }
+type Bucket = "generate" | "upload" | "buy"
 
-type GroupKey = "generate" | "upload" | "buy"
+/* ───── Helpers ───── */
+const DAY = 86_400_000
+const last30ISO = new Date(Date.now() - 30 * DAY).toISOString()
 
-/* ──────────────────────────────────────────────── */
-/* Helper utils                                    */
-/* ──────────────────────────────────────────────── */
 function toDayUTC(d: Date) {
-  const y = d.getUTCFullYear()
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0")
-  const dd = String(d.getUTCDate()).padStart(2, "0")
-  return `${y}-${m}-${dd}`
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    d.getUTCDate()
+  ).padStart(2, "0")}`
 }
+const fmt = (n: number) => new Intl.NumberFormat().format(n)
 
-function fmt(n: number) {
-  return new Intl.NumberFormat().format(n)
-}
+/* Only count terminal-state rows */
+function classify(r: Row): Bucket | null {
+  if (r.name === "upload") {
+    if (r.props?.phase === "saved_to_supabase") return "upload"
+    if (r.props?.action === "upload_ok") return "upload"
+    return null
+  }
 
-/* Map each row → bucket */
-function classify(r: EventRow): GroupKey | null {
-  /* direct name match */
-  if (r.name === "generate") return "generate"
-  if (r.name === "upload")   return "upload"
-  if (["buy", "checkout", "purchase", "purchased"].includes(r.name)) return "buy"
+  if (["buy", "checkout", "purchase"].includes(r.name)) return "buy"
 
-  /* fallback to props.action */
-  const a = r.props?.action ?? ""
-  if (a.startsWith("upload_") || a === "cropped") return "upload"
-  if (["checkout", "payment_intent_succeeded", "purchased", "purchase"].includes(a))
-    return "buy"
-  if (a) return "generate"
+  if (r.name === "generate") {
+    if (r.props?.action === "done") return "generate"
+    /* “upload_ok” comes through as name=generate */
+    if (r.props?.action === "upload_ok") return "upload"
+    return null
+  }
+
+  /* fallback on Stripe success in props.action */
+  if (r.props?.action === "payment_intent_succeeded") return "buy"
 
   return null
 }
 
-/* ──────────────────────────────────────────────── */
-/* Main page                                       */
-/* ──────────────────────────────────────────────── */
+/* ───── Page ───── */
 export default async function UsageDashboard() {
-  const db = getAdminClient()
-
-  /* last 30 days */
-  const sinceISO = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-
+  const db = getAdmin()
   const { data, error } = await db
     .from("app_events")
-    .select("ts,name,user_id,device_id,session_id,props")
-    .gte("ts", sinceISO)
+    .select("ts,name,user_id,device_id,props")
+    .gte("ts", last30ISO)
     .order("ts", { ascending: true })
-    .range(0, 50000)
+    .range(0, 50_000)
 
   if (error) throw new Error(`Failed to load events: ${error.message}`)
 
-  const rows: EventRow[] = (data ?? []).filter(
-    (r): r is EventRow => r && typeof r.name === "string"
-  )
+  const rows: Row[] = (data ?? []).filter((r): r is Row => !!r && typeof r.name === "string")
 
-  /* ---------- aggregate ---------- */
-  type Agg = {
-    total: number
-    uniqueUsers: Set<string>
-    uniqueDevices: Set<string>
-    lastAt: string | null
-  }
-  const agg: Record<GroupKey, Agg> = {
-    generate: { total: 0, uniqueUsers: new Set(), uniqueDevices: new Set(), lastAt: null },
-    upload:   { total: 0, uniqueUsers: new Set(), uniqueDevices: new Set(), lastAt: null },
-    buy:      { total: 0, uniqueUsers: new Set(), uniqueDevices: new Set(), lastAt: null },
+  /* ─ aggregates ─ */
+  const agg: Record<Bucket, { t: number; u: Set<string>; d: Set<string>; last: string | null }> = {
+    generate: { t: 0, u: new Set(), d: new Set(), last: null },
+    upload:   { t: 0, u: new Set(), d: new Set(), last: null },
+    buy:      { t: 0, u: new Set(), d: new Set(), last: null },
   }
 
-  /* ---------- daily buckets (14 days) ---------- */
-  const dayKeys: string[] = []
-  const daysBack = 14
-  const base = new Date()
-  for (let i = daysBack - 1; i >= 0; i--) {
-    const d = new Date(base)
-    d.setUTCDate(d.getUTCDate() - i)
-    dayKeys.push(toDayUTC(d))
-  }
-  const daily: Record<GroupKey, Record<string, number>> = {
-    generate: Object.fromEntries(dayKeys.map((d) => [d, 0])),
-    upload:   Object.fromEntries(dayKeys.map((d) => [d, 0])),
-    buy:      Object.fromEntries(dayKeys.map((d) => [d, 0])),
+  /* 14-day daily buckets */
+  const dailyKeys = [...Array(14)]
+    .map((_, i) => {
+      const d = new Date(Date.now() - (13 - i) * DAY)
+      return toDayUTC(d)
+    })
+  const daily: Record<Bucket, Record<string, number>> = {
+    generate: Object.fromEntries(dailyKeys.map((k) => [k, 0])),
+    upload:   Object.fromEntries(dailyKeys.map((k) => [k, 0])),
+    buy:      Object.fromEntries(dailyKeys.map((k) => [k, 0])),
   }
 
-  /* crunch */
   for (const r of rows) {
-    const bucket = classify(r)
-    if (!bucket) continue
+    const b = classify(r)
+    if (!b) continue
 
-    agg[bucket].total++
-    if (r.user_id)   agg[bucket].uniqueUsers.add(r.user_id)
-    else if (r.device_id) agg[bucket].uniqueDevices.add(r.device_id)
-    if (r.ts)        agg[bucket].lastAt = r.ts
+    agg[b].t++
+    if (r.user_id) agg[b].u.add(r.user_id)
+    else if (r.device_id) agg[b].d.add(r.device_id)
+    if (r.ts) agg[b].last = r.ts
 
     if (r.ts) {
-      const k = toDayUTC(new Date(r.ts))
-      if (daily[bucket][k] !== undefined) daily[bucket][k]++
+      const key = toDayUTC(new Date(r.ts))
+      if (daily[b][key] !== undefined) daily[b][key]++
     }
   }
 
-  const cards: { key: GroupKey; title: string; subtitle: string }[] = [
-    { key: "generate", title: "Generate", subtitle: "AI generations" },
-    { key: "upload",   title: "Upload",   subtitle: "File uploads" },
-    { key: "buy",      title: "Buy",      subtitle: "Checkouts / purchases" },
-  ]
+  const cards = [
+    { k: "generate", title: "Generate", sub: "AI generations" },
+    { k: "upload",   title: "Upload",   sub: "File uploads" },
+    { k: "buy",      title: "Buy",      sub: "Checkouts / purchases" },
+  ] as const
 
-  const last50 = [...rows].slice(-50).reverse()
+  const last50 = rows.slice(-50).reverse()
 
-  /* ───────────────────────────── UI ───────────────────────────── */
+  /* ───── UI ───── */
   return (
     <div className="min-h-screen bg-black text-white px-6 sm:px-6 py-10">
       <div className="mx-auto max-w-6xl">
-        <h1 className="text-3xl font-bold tracking-wide mb-2">
-          Usage Dashboard
-        </h1>
+        <h1 className="text-3xl font-bold mb-2">Usage Dashboard</h1>
         <p className="text-sm text-gray-400 mb-8">
-          Window: last&nbsp;30 days • Source: <code>public.app_events</code> •
-          UTC
+          Last&nbsp;30 days • Source&nbsp;<code>public.app_events</code> • UTC
         </p>
 
-        {/* summary cards */}
+        {/* summary */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-          {cards.map(({ key, title, subtitle }) => {
-            const a = agg[key];
-            return (
-              <Card
-                key={key}
-                className="bg-zinc-900 border border-zinc-800 rounded-xl"
-              >
-                <CardHeader className="pb-2">
-                  <CardTitle>{title}</CardTitle>
-                  <p className="text-xs text-gray-400">{subtitle}</p>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-400">Events</span>
-                    <span className="text-2xl font-semibold text-gray-400">
-                      {fmt(a.total)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-400">
-                      Unique signed-in users
-                    </span>
-                    <span className="text-lg text-gray-400">
-                      {fmt(a.uniqueUsers.size)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-400">
-                      Unique guest devices
-                    </span>
-                    <span className="text-lg text-gray-400">
-                      {fmt(a.uniqueDevices.size)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between pt-1 border-t border-zinc-800">
-                    <span className="text-xs text-gray-500">Last event</span>
-                    <span className="text-xs text-gray-400">
-                      {a.lastAt ? new Date(a.lastAt).toLocaleString() : "—"}
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+          {cards.map(({ k, title, sub }) => (
+            <Card key={k} className="bg-zinc-900 border border-zinc-800">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-gray-400">{title}</CardTitle>
+                <p className="text-xs text-gray-400">{sub}</p>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-400">Events</span>
+                  <span className="text-2xl font-semibold text-gray-300">
+                    {fmt(agg[k].t)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-400">Unique users</span>
+                  <span className="text-lg text-gray-300">
+                    {fmt(agg[k].u.size)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-400">Guest devices</span>
+                  <span className="text-lg text-gray-300">
+                    {fmt(agg[k].d.size)}
+                  </span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-zinc-800">
+                  <span className="text-xs text-gray-500">Last event</span>
+                  <span className="text-xs text-gray-400">
+                    {agg[k].last ? new Date(agg[k].last).toLocaleString() : "—"}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
         </div>
 
-        {/* daily table */}
-        <Card className="bg-zinc-900 border border-zinc-800 rounded-xl">
+        {/* daily */}
+        <Card className="bg-zinc-900 border border-zinc-800">
           <CardHeader>
             <CardTitle className="text-gray-400">
               Daily totals (last 14 days)
@@ -203,20 +169,16 @@ export default async function UsageDashboard() {
           <CardContent className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-zinc-800">
-                  <th className="py-2 pr-4 text-left text-gray-400">
-                    Day (UTC)
-                  </th>
-                  <th className="py-2 pr-4 text-left text-gray-400">
-                    Generate
-                  </th>
-                  <th className="py-2 pr-4 text-left text-gray-400">Upload</th>
-                  <th className="py-2 pr-4 text-left text-gray-400">Buy</th>
-                  <th className="py-2 pr-4 text-left text-gray-400">Total</th>
+                <tr className="border-b border-zinc-800 text-gray-400">
+                  <th className="py-2 pr-4 text-left">Day</th>
+                  <th className="py-2 pr-4 text-left">Generate</th>
+                  <th className="py-2 pr-4 text-left">Upload</th>
+                  <th className="py-2 pr-4 text-left">Buy</th>
+                  <th className="py-2 pr-4 text-left">Total</th>
                 </tr>
               </thead>
               <tbody>
-                {dayKeys.map((d) => {
+                {dailyKeys.map((d) => {
                   const g = daily.generate[d];
                   const u = daily.upload[d];
                   const b = daily.buy[d];
@@ -237,27 +199,23 @@ export default async function UsageDashboard() {
           </CardContent>
         </Card>
 
-        {/* debug: last 50 */}
+        {/* debug */}
         <div className="mt-8">
-          <Card className="bg-zinc-900 border border-zinc-800 rounded-xl">
+          <Card className="bg-zinc-900 border border-zinc-800">
             <CardHeader>
               <CardTitle className="text-base text-gray-400">
-                Last 50 events (debug)
+                Last 50 raw rows
               </CardTitle>
             </CardHeader>
             <CardContent className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-zinc-800 text-gray-400">
-                    <th className="py-2 pr-3 text-left text-gray-300">TS</th>
-                    <th className="py-2 pr-3 text-left text-gray-300">Name</th>
-                    <th className="py-2 pr-3 text-left text-gray-300">User</th>
-                    <th className="py-2 pr-3 text-left text-gray-300">
-                      Device
-                    </th>
-                    <th className="py-2 pr-3 text-left text-gray-300">
-                      Action
-                    </th>
+                    <th className="py-2 pr-3 text-left">TS</th>
+                    <th className="py-2 pr-3 text-left">Name</th>
+                    <th className="py-2 pr-3 text-left">User</th>
+                    <th className="py-2 pr-3 text-left">Device</th>
+                    <th className="py-2 pr-3 text-left">Action/Phase</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -274,9 +232,7 @@ export default async function UsageDashboard() {
                         {e.device_id ?? "—"}
                       </td>
                       <td className="py-1 pr-3 text-gray-300">
-                        {e.props?.action ??
-                          Object.keys(e.props ?? {})[0] ??
-                          "—"}
+                        {e.props?.action ?? e.props?.phase ?? "—"}
                       </td>
                     </tr>
                   ))}
@@ -287,8 +243,7 @@ export default async function UsageDashboard() {
         </div>
 
         <p className="text-xs text-gray-500 mt-4">
-          “Unique guest devices” uses <code>device_id</code> as a proxy for
-          logged-out users.
+          Guest devices ≈ <code>device_id</code> for logged-out users.
         </p>
       </div>
     </div>
