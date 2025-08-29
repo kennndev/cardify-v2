@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/hooks/use-toast'
 import { signInWithGoogle } from '@/lib/supabase-browser'
+import { track } from "@/lib/analytics-client"
 
 type ListingRow = {
   id: string
@@ -293,24 +294,76 @@ export default function MarketplacePage() {
   )
 
   // buy action with auth gate
-  const handleBuy = useCallback(
-    (listing: ListingRow) => {
-      if (listing.status !== 'listed' || !listing.is_active) {
-        toast({ title: 'Unavailable', description: 'This item is not currently available.', variant: 'destructive' })
-        return
-      }
+const handleBuy = useCallback(
+  (listing: ListingRow): void => {
+    const t0 = performance.now();
 
-      const checkoutUrl = `/checkout?listingId=${listing.id}`
+    // initial click
+    void track("buy", {
+      action: "click",
+      listingId: listing.id,
+      sellerId: listing.seller_id,
+      price_cents: listing.price_cents,
+      status: listing.status,
+      is_active: listing.is_active,
+      authed: !!uid,
+    });
 
-      if (!uid) {
-        signInWithGoogle(checkoutUrl)
-        return
-      }
+    // unavailable guard
+    if (listing.status !== "listed" || !listing.is_active) {
+      toast({
+        title: "Unavailable",
+        description: "This item is not currently available.",
+        variant: "destructive",
+      });
+      void track("buy", {
+        action: "blocked",
+        reason: "unavailable",
+        listingId: listing.id,
+      });
+      return;
+    }
 
-      router.push(checkoutUrl)
-    },
-    [uid, router, toast]
-  )
+    // prevent self-purchase (defense in depth; UI already hides button)
+    if (uid && uid === listing.seller_id) {
+      toast({
+        title: "You're the seller",
+        description: "You can't buy your own listing.",
+        variant: "destructive",
+      });
+      void track("buy", {
+        action: "blocked",
+        reason: "self_purchase",
+        listingId: listing.id,
+      });
+      return;
+    }
+
+    const checkoutUrl = `/checkout?listingId=${encodeURIComponent(listing.id)}`;
+
+    // auth gate
+    if (!uid) {
+      void track("buy", {
+        action: "auth_gate",
+        next: checkoutUrl,
+        listingId: listing.id,
+      });
+      signInWithGoogle(checkoutUrl);
+      return;
+    }
+
+    // redirect to checkout
+    void track("buy", {
+      action: "redirect_checkout",
+      listingId: listing.id,
+      duration_ms: Math.round(performance.now() - t0),
+    });
+
+    router.push(checkoutUrl);
+  },
+  [uid, router, toast]
+);
+
   
   // open detail modal
   const openDetailModal = useCallback((listing: ListingRow) => {
