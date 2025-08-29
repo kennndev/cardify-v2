@@ -15,7 +15,7 @@ import { cropImageToAspectRatio } from "@/lib/image-processing"
 import { uploadToSupabase } from "@/lib/supabase-storage"
 import { getSupabaseBrowserClient, signInWithGoogle } from "@/lib/supabase-browser"
 import { useToast } from "@/hooks/use-toast"
-import { track } from "@/lib/analytics-client"
+import { track } from "../../lib/analytics-client"
 
 
 export default function UploadPage() {
