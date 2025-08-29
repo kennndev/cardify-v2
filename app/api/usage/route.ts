@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 const url  = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const key  = process.env.SUPABASE_SERVICE_ROLE_KEY!; // DO NOT expose this to the browser
+const key  = process.env.SUPABASE_SERVICE_KEY!; // DO NOT expose this to the browser
 
 // Service-role client bypasses RLS
 const admin = createClient(url, key, {
