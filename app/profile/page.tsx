@@ -45,6 +45,7 @@ type AssetRow = {
   mime_type: string | null
   size_bytes: number | null
   created_at: string | null
+  metadata: Record<string, any> | null 
 }
 
 type UIAsset = {
@@ -57,6 +58,7 @@ type UIAsset = {
   uploaded_at: string | null
   public_url: string
   source_type: string | null 
+  isGenerated: boolean   
 }
 
 const toUI = (row: AssetRow): UIAsset => {
@@ -76,6 +78,7 @@ const toUI = (row: AssetRow): UIAsset => {
     uploaded_at: row.created_at ?? null,
     public_url: row.image_url ?? "",
     source_type: row.source_type ?? null,
+    isGenerated: !!row.metadata?.is_ai_generation,
   }
 }
 // inside your Profile component
@@ -267,12 +270,16 @@ const confirmDelete = async () => {
     return
   }
 
+  const SELECT_COLUMNS =
+  "id, owner_id, source_type, title, image_url, storage_path, mime_type, size_bytes, created_at, metadata";
+
+  
   const ids = grants.map(g => g.asset_id).filter(Boolean)
   // 2) fetch the assets the user has grants for
   const { data: rows, error: aErr } = await supabase
     .from("user_assets")
-    .select("id, owner_id, source_type, title, image_url, storage_path, mime_type, size_bytes, created_at")    .in("id", ids as string[])
-    .order("created_at", { ascending: false })
+.select(SELECT_COLUMNS) 
+     .order("created_at", { ascending: false })
     .returns<AssetRow[]>()
 
   if (aErr) {
@@ -355,14 +362,26 @@ useEffect(() => {
 }, [])
 
 
-  const uploads = useMemo(
-    () => assets.filter((a) => a.source_type === "uploaded_image"),
-    [assets],
-  )
-  const generations = useMemo(
-    () => assets.filter((a) => a.source_type !== "uploaded_image"),
-    [assets],
-  )
+const deduped = useMemo(() => {
+ const map = new Map<string, UIAsset>(); // key = storage_path
+  for (const a of assets) {
+    const key = a.file_path;              // storage_path is unique per file
+    const prev = map.get(key);
+    if (!prev) map.set(key, a);
+    else if (a.isGenerated && !prev.isGenerated) map.set(key, a); // keep generated copy
+  }
+  return Array.from(map.values());
+}, [assets]);
+
+const uploads = useMemo(
+  () => deduped.filter((a) => !a.isGenerated && a.source_type === "uploaded_image"),
+  [deduped],
+);
+
+const generations = useMemo(
+  () => deduped.filter((a) => a.isGenerated || a.source_type !== "uploaded_image"),
+  [deduped],
+);
 
   const uploadsMb = useMemo(
     () =>
