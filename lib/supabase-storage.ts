@@ -66,6 +66,7 @@ export async function uploadToSupabase(
     timestamp        : new Date().toISOString(),
   };
 
+  const isAI = opts.metadata?.is_ai_generation === true;
   const payload = {
     image_url      : publicUrl,
     storage_path   : storagePath,
@@ -73,11 +74,11 @@ export async function uploadToSupabase(
     file_type      : mime,
     user_email     : userEmail,
     user_id        : userId,
-    metadata       : {
-      source_type: "uploaded_image",          // ←  always set
-      ...baseMetadata,
-      ...(opts.metadata || {}),
-    },
+  source_type: isAI ? "ai_generation" : "uploaded_image",
+  metadata   : {
+    ...baseMetadata,
+    ...(opts.metadata || {}),
+  },
   };
 
   /* try normal insert first */
