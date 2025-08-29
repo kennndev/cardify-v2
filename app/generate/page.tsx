@@ -44,8 +44,9 @@ import { uploadToSupabase } from "@/lib/supabase-storage";
 import { uploadTempReferenceImage, deleteTempReferenceImage } from "@/lib/supabase-temp-storage";
 
 import { cropImageToAspectRatio } from "@/lib/image-processing";
-
+import { track } from "@/lib/analytics-client"
 import { v4 as uuidv4 } from "uuid";
+
 const DEVICE_STORAGE_KEY = "cardify.device_id";
 
 /** Return a UUID that stays the same for this browser until local-storage is cleared */
@@ -670,21 +671,31 @@ const burnFreeQuota = async () => {
 
   /* ─────────── generate card ─────────── */
 
-const handleGenerate = async () => {
+const handleGenerate = async (): Promise<void> => {
   const supabase = getSupabaseBrowserClient();
+  const t0 = performance.now();
 
   // ─── quota preflight (UI-only) ───
-  const paidCreditsLeft  = credits;                         // from DB
-  const dbFreebiesLeft   = Math.max(0, FREE_LIMIT - freeGenerationsUsed);
-  const guestQuotaLeft   = remainingGenerations;            // local for guests
+  const paidCreditsLeft = Number(credits);
+  const dbFreebiesLeft  = Math.max(0, FREE_LIMIT - Number(freeGenerationsUsed));
+  const guestQuotaLeft  = Number(remainingGenerations);
+
+  await track("generate", {
+    action: "preflight",
+    authed: !!user,
+    paidCreditsLeft,
+    dbFreebiesLeft,
+    guestQuotaLeft,
+  });
 
   if (!user) {
     if (guestQuotaLeft <= 0) {
+      await track("generate", { action: "blocked", reason: "guest_no_quota" });
       signInWithGoogle("/generate");
       return;
     }
   } else if (paidCreditsLeft <= 0 && dbFreebiesLeft <= 0) {
-    // UX guard only; the DB trigger will enforce anyway
+    await track("generate", { action: "blocked", reason: "no_credits_and_no_freebies" });
     window.location.href = "/credits";
     return;
   }
@@ -693,6 +704,7 @@ const handleGenerate = async () => {
   const prompt = generatePrompt(editedPrompt);
   if (!prompt && !referenceImage) {
     setGenerationError("Fill at least one field or upload an image");
+    await track("generate", { action: "blocked", reason: "empty_prompt_and_no_image" });
     return;
   }
 
@@ -703,62 +715,90 @@ const handleGenerate = async () => {
 
   try {
     // ─── call image API ───
-    const body: any = {
+    const body: {
+      prompt: string;
+      maintainLikeness: boolean;
+      referenceImageUrl?: string;
+      referenceImage?: string; // legacy base64 fallback
+    } = {
       prompt,
-      // if you switched to URL-based temp reference, pass it here:
-      referenceImageUrl: referenceImagePublicUrl ?? undefined,
-      maintainLikeness,
+      maintainLikeness: !!maintainLikeness,
     };
-    if (!referenceImagePublicUrl && referenceImage) {
-      // legacy base64 fallback if present
+
+    if (referenceImagePublicUrl) {
+      body.referenceImageUrl = referenceImagePublicUrl;
+    } else if (referenceImage) {
       body.referenceImage = referenceImage;
     }
 
-    const res  = await fetch("/api/generate-image", {
-      method : "POST",
+    await track("generate", { action: "request_start" });
+
+    const res = await fetch("/api/generate-image", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body   : JSON.stringify(body),
+      body: JSON.stringify(body),
     });
 
-    const data = await res.json();
+    // ---- Properly typed response handling ----
+    type GenSuccess = { imageUrl: string };
+    type GenError   = { error?: string; code?: string };
+    type GenResponse = GenSuccess | GenError;
 
-    if (!res.ok) {
-      if (data.code === "RATE_LIMIT_EXCEEDED") {
-        setGenerationError(
-          user ? "OpenAI rate-limit hit — wait a minute"
-               : "Rate limit hit — please sign in."
-        );
+    const isGenSuccess = (x: unknown): x is GenSuccess =>
+      !!x && typeof (x as any).imageUrl === "string";
+
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch {
+      json = { error: "Malformed response" } as GenError;
+    }
+
+    if (!res.ok || !isGenSuccess(json)) {
+      const err = (json as GenError) ?? {};
+      await track("generate", {
+        action: "request_error",
+        status: res.status,
+        code: err.code ?? null,
+        message: err.error ?? "Unknown error",
+      });
+
+      if (err.code === "RATE_LIMIT_EXCEEDED") {
+        setGenerationError(user ? "OpenAI rate-limit hit — wait a minute" : "Rate limit hit — please sign in.");
         if (!user) setRemainingGenerations(0);
       } else {
-        setGenerationError(data.error || "Failed to generate image");
+        setGenerationError(err.error || "Failed to generate image");
       }
       return;
     }
 
-    // ─── show in-session preview ───
-    setGeneratedImage(data.imageUrl);
-    const imgs = [...sessionImages, data.imageUrl];
+    // success path
+    const { imageUrl } = json;
+    setGeneratedImage(imageUrl);
+    const imgs = [...sessionImages, imageUrl];
     setSessionImages(imgs);
     setCurrentImageIndex(imgs.length - 1);
+    await track("generate", { action: "preview_ready" });
 
-    // ─── Optional: burn one guest free slot (guests only, UI bookkeeping) ───
+    // Guest: burn one free slot (UI bookkeeping)
     if (!user) {
       await burnFreeQuota();
+      await track("generate", { action: "guest_quota_burned" });
     }
 
-    // ─── upload to Storage + DB (auth users only) ───
+    // Auth: upload to Storage + DB
     if (user) {
       setIsUploadingToDatabase(true);
       setUploadError(null);
 
       try {
-        const blob    = await fetch(data.imageUrl).then(r => r.blob());
-        const cropped = await cropImageToAspectRatio(
-          new File([blob], "card.png", { type: blob.type })
-        );
+        await track("generate", { action: "upload_start" });
+
+        const blob = await fetch(imageUrl).then(r => r.blob());
+        const file = new File([blob], "card.png", { type: blob.type });
+        const cropped = await cropImageToAspectRatio(file);
         setProcessedImageBlob(cropped);
 
-        // IMPORTANT: mark this as an AI generation so the trigger can decide
         const { publicUrl } = await uploadToSupabase(
           cropped,
           undefined,
@@ -766,16 +806,23 @@ const handleGenerate = async () => {
         );
 
         setUploadedImageUrl(publicUrl);
-      } catch (e: any) {
+        await track("generate", { action: "upload_ok" });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
         console.error("Upload failed:", e);
         setUploadError("Upload failed — image won’t be purchasable");
+        await track("generate", { action: "upload_fail", message: msg });
       } finally {
         setIsUploadingToDatabase(false);
       }
     }
-  } catch (err: any) {
-    setGenerationError(err.message || "Unknown error");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    setGenerationError(msg || "Unknown error");
+    await track("generate", { action: "unexpected_error", message: msg });
   } finally {
+    const duration_ms = Math.round(performance.now() - t0);
+    await track("generate", { action: "done", duration_ms });
     setIsGenerating(false);
     setGenerationStartTime(null);
     setGenerationElapsedTime(0);
