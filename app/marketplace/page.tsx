@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/hooks/use-toast'
 import { signInWithGoogle } from '@/lib/supabase-browser'
-import { track } from "@/lib/analytics-client"
+import { track } from "../../lib/analytics-client"
 
 type ListingRow = {
   id: string
