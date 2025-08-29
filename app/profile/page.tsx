@@ -72,6 +72,20 @@ const toUI = (row: AssetRow): UIAsset => {
   }
 }
 
+// inside your Profile component
+type SellerBalance = {
+  connected: boolean
+  stripeAccount: string | null
+  stripeBalance: {
+    available?: Record<string, number>
+    pending?: Record<string, number>
+  } | null
+  totals: Record<
+    string,
+    { gross: number; fee: number; net: number; net_completed: number; net_pending: number }
+  >
+}
+
 type ListingRow = {
   id: string
   source_id: string
@@ -148,6 +162,7 @@ const [selectedCardForCheckout, setSelectedCardForCheckout] = useState<UIAsset |
 
 const [purchases, setPurchases] = useState<UIAsset[]>([])
 const [loadingPurchases, setLoadingPurchases] = useState<boolean>(true)
+const [sellerBal, setSellerBal] = useState<SellerBalance | null>(null)
 
 
 const openDeleteConfirm = (a: UIAsset) => {
@@ -542,6 +557,19 @@ const deleteAsset = async (a: UIAsset) => {
 }
 
 
+useEffect(() => {
+  (async () => {
+    try {
+      const res = await fetch("/api/seller/balance", { cache: "no-store" })
+      if (res.ok) setSellerBal(await res.json())
+    } catch {}
+  })()
+}, [])
+
+const fmt = (cents: number, cur = "USD") =>
+  (cents / 100).toLocaleString(undefined, { style: "currency", currency: cur })
+
+
   // UI
 return (
   <div className="min-h-screen bg-cyber-black relative overflow-hidden font-mono">
@@ -666,6 +694,57 @@ return (
           </div>
         )}
       </div>
+
+      {/* Earnings & Balance */}
+{uid && sellerBal && (
+  <div className="mb-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
+    {/* 1) Live Stripe balance (only shows for Express/Custom; otherwise "—") */}
+    <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
+      <CardContent className="p-4">
+        <div className="text-xs text-gray-400 mb-1">Stripe Balance (available)</div>
+        <div className="text-2xl font-bold text-white">
+          {sellerBal.stripeBalance?.available
+            ? fmt(sellerBal.stripeBalance.available.USD ?? 0, "USD")
+            : "—"}
+        </div>
+        <div className="text-xs text-gray-500 mt-1">
+          Pending:{" "}
+          {sellerBal.stripeBalance?.pending
+            ? fmt(sellerBal.stripeBalance.pending.USD ?? 0, "USD")
+            : "—"}
+        </div>
+      </CardContent>
+    </Card>
+
+    {/* 2) Lifetime net earned (your DB) */}
+    <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
+      <CardContent className="p-4">
+        <div className="text-xs text-gray-400 mb-1">Lifetime Net</div>
+        <div className="text-2xl font-bold text-white">
+          {fmt(sellerBal.totals?.USD?.net ?? 0, "USD")}
+        </div>
+        <div className="text-xs text-gray-500 mt-1">
+          Completed: {fmt(sellerBal.totals?.USD?.net_completed ?? 0, "USD")}
+        </div>
+      </CardContent>
+    </Card>
+
+    {/* 3) Not yet completed (your DB view of “pending”) */}
+    <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
+      <CardContent className="p-4">
+        <div className="text-xs text-gray-400 mb-1">Net Pending</div>
+        <div className="text-2xl font-bold text-white">
+          {fmt(sellerBal.totals?.USD?.net_pending ?? 0, "USD")}
+        </div>
+        <div className="text-xs text-gray-500 mt-1">
+          Gross: {fmt(sellerBal.totals?.USD?.gross ?? 0, "USD")} • Fees:{" "}
+          {fmt(sellerBal.totals?.USD?.fee ?? 0, "USD")}
+        </div>
+      </CardContent>
+    </Card>
+  </div>
+)}
+
 
       {/* Header with Create Button */}
       <div className="mb-8">
