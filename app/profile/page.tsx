@@ -78,7 +78,9 @@ const toUI = (row: AssetRow): UIAsset => {
     uploaded_at: row.created_at ?? null,
     public_url: row.image_url ?? "",
     source_type: row.source_type ?? null,
-    isGenerated: !!row.metadata?.is_ai_generation,
+  isGenerated:
+    row.source_type === 'ai_generation' ||
+    !!row.metadata?.is_ai_generation,       
   }
 }
 // inside your Profile component
@@ -270,10 +272,11 @@ const confirmDelete = async () => {
     return
   }
 
-  const SELECT_COLUMNS =
-  "id, owner_id, source_type, title, image_url, storage_path, mime_type, size_bytes, created_at, metadata";
+const SELECT_COLUMNS = `
+  id, owner_id, source_type, title, image_url, storage_path,
+  mime_type, size_bytes, created_at, metadata  
+`;
 
-  
   const ids = grants.map(g => g.asset_id).filter(Boolean)
   // 2) fetch the assets the user has grants for
   const { data: rows, error: aErr } = await supabase
