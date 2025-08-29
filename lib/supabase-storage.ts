@@ -73,8 +73,11 @@ export async function uploadToSupabase(
     file_type      : mime,
     user_email     : userEmail,
     user_id        : userId,
-    metadata       : { ...baseMetadata, ...(opts.metadata || {}) },
-  };
+ metadata       : {
+      source_type: "uploaded_image",       
+      ...baseMetadata,
+      ...(opts.metadata || {}),
+    },  };
 
   const { data: rec, error: dbError } = await supabase
     .from("uploaded_images")
