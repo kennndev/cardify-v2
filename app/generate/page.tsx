@@ -45,7 +45,8 @@ import { uploadTempReferenceImage, deleteTempReferenceImage } from "@/lib/supaba
 
 import { cropImageToAspectRatio } from "@/lib/image-processing";
 import { v4 as uuidv4 } from "uuid";
-import { track } from "@/lib/analytics-client"
+import { track } from "../../lib/analytics-client"
+
 
 const DEVICE_STORAGE_KEY = "cardify.device_id";
 
