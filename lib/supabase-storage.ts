@@ -74,9 +74,10 @@ export async function uploadToSupabase(
     file_type      : mime,
     user_email     : userEmail,
     user_id        : userId,
-  source_type: isAI ? "ai_generation" : "uploaded_image",
   metadata   : {
     ...baseMetadata,
+    ...(opts.metadata || {}),
+    source_type      : isAI ? "ai_generation" : "uploaded_image",
     ...(opts.metadata || {}),
   },
   };
