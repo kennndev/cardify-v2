@@ -15,6 +15,8 @@ import { cropImageToAspectRatio } from "@/lib/image-processing"
 import { uploadToSupabase } from "@/lib/supabase-storage"
 import { getSupabaseBrowserClient, signInWithGoogle } from "@/lib/supabase-browser"
 import { useToast } from "@/hooks/use-toast"
+import { track } from "@/lib/analytics-client"
+
 
 export default function UploadPage() {
   /* ────────────────────────────── state ────────────────────────────── */
@@ -98,40 +100,56 @@ export default function UploadPage() {
   }
 
   /* ───────────────────────── upload handler ─────────────────────────── */
- const handleFileUpload = useCallback(async (file: File) => {
-  setIsUploading(true);
-  setFileName(file.name);
-  setFileSize((file.size / (1024 * 1024)).toFixed(2) + " MB");
-  setUploadProgress(0);
-  setUploadError(null);
+const handleFileUpload = useCallback(async (file: File) => {
+  const t0 = performance.now()
+  await track("upload", {
+    action: "select_file",
+    name: file.name,
+    size: file.size,
+    type: file.type,
+  })
+
+  setIsUploading(true)
+  setFileName(file.name)
+  setFileSize((file.size / (1024 * 1024)).toFixed(2) + " MB")
+  setUploadProgress(0)
+  setUploadError(null)
 
   // Clear previous states
-  setUploadedImageUrl(null);
+  setUploadedImageUrl(null)
 
   // Temporary preview while we process/upload
-  const tempPreviewURL = URL.createObjectURL(file);
-  setUploadedImage(tempPreviewURL);
+  const tempPreviewURL = URL.createObjectURL(file)
+  setUploadedImage(tempPreviewURL)
 
-  const prog = setInterval(() => setUploadProgress(p => (p >= 70 ? 70 : p + 10)), 200);
+  const prog = setInterval(() => setUploadProgress(p => (p >= 70 ? 70 : p + 10)), 200)
 
   try {
     // 1) Process to card aspect
-    let processedBlob: Blob = file;
+    let processedBlob: Blob = file
     try {
-      processedBlob = await cropImageToAspectRatio(file);
-      setProcessedImageBlob(processedBlob);
-    } catch {
-      setProcessedImageBlob(file);
+      processedBlob = await cropImageToAspectRatio(file)
+      setProcessedImageBlob(processedBlob)
+      await track("upload", { phase: "cropped" })
+    } catch (cropErr: any) {
+      // Fallback to raw file, but record the failure of cropping
+      setProcessedImageBlob(file)
+      await track(
+        "upload",
+        { phase: "crop_failed_fallback_raw", msg: String(cropErr?.message || cropErr) },
+        "error"
+      )
     }
 
-    clearInterval(prog);
-    setUploadProgress(80);
+    clearInterval(prog)
+    setUploadProgress(80)
 
     // 2) Guests: preview only (no upload/billing)
     if (isGuest) {
-      setUploadProgress(100);
-      setTimeout(() => setIsUploading(false), 400);
-      return;
+      setUploadProgress(100)
+      await track("upload", { phase: "guest_preview_only" }, "ok", performance.now() - t0)
+      setTimeout(() => setIsUploading(false), 400)
+      return
     }
 
     // 3) Authenticated: upload and let the DB trigger bill a paid credit.
@@ -139,95 +157,163 @@ export default function UploadPage() {
     try {
       const { publicUrl } = await uploadToSupabase(processedBlob, undefined, {
         metadata: { is_ai_generation: false },
-      });
+      })
 
-      setUploadedImageUrl(publicUrl);
-      setUploadedImage(publicUrl);
-      URL.revokeObjectURL(tempPreviewURL);
-      setUploadProgress(100);
+      setUploadedImageUrl(publicUrl)
+      setUploadedImage(publicUrl)
+      URL.revokeObjectURL(tempPreviewURL)
+      setUploadProgress(100)
+
+      await track(
+        "upload",
+        { phase: "saved_to_supabase", hasUrl: !!publicUrl },
+        "ok",
+        performance.now() - t0
+      )
 
       // Soft refresh credits in case Realtime lags
       try {
-        const sb = getSupabaseBrowserClient();
+        const sb = getSupabaseBrowserClient()
         if (user?.id) {
           const { data } = await sb
             .from("mkt_profiles")
             .select("credits")
             .eq("id", user.id)
-            .maybeSingle();
-          if (data) setCredits(Number(data.credits ?? 0));
+            .maybeSingle()
+          if (data) setCredits(Number(data.credits ?? 0))
         }
       } catch {
         /* non-fatal */
       }
     } catch (uploadErr: any) {
-      console.error("Upload to Supabase failed:", uploadErr);
-      const msg = String(uploadErr?.message || uploadErr);
+      console.error("Upload to Supabase failed:", uploadErr)
+      const msg = String(uploadErr?.message || uploadErr)
+
+      await track(
+        "upload",
+        { phase: "upload_error", msg },
+        "error",
+        performance.now() - t0
+      )
 
       if (msg.includes("insufficient_credits") || msg.includes("insufficient_credits_or_free_gens")) {
-        setUploadError("No credits remaining. Purchase credits to continue.");
-        setCredits(0);
+        setUploadError("No credits remaining. Purchase credits to continue.")
+        setCredits(0)
       } else if (msg === "not_signed_in") {
         // Keep the blob URL preview; user is not authenticated
       } else {
-        setUploadError("Failed to upload image. Please try again.");
+        setUploadError("Failed to upload image. Please try again.")
       }
-      setUploadProgress(100);
+      setUploadProgress(100)
     }
-  } catch (error) {
-    console.error("Image processing failed:", error);
-    clearInterval(prog);
-    setUploadError("Failed to process image. Please try again.");
-    setUploadProgress(100);
+  } catch (error: any) {
+    console.error("Image processing failed:", error)
+    clearInterval(prog)
+    await track(
+      "upload",
+      { phase: "processing_exception", msg: String(error?.message || error) },
+      "error",
+      performance.now() - t0
+    )
+    setUploadError("Failed to process image. Please try again.")
+    setUploadProgress(100)
   } finally {
-    setTimeout(() => setIsUploading(false), 400);
+    clearInterval(prog)
+    setTimeout(() => setIsUploading(false), 400)
   }
-}, [isGuest, user?.id]);
+}, [isGuest, user?.id])
+
 
 
   /* ───────────────────── finalize / buy / sign-in ───────────────────── */
-  const finishOrRedirect = async () => {
-    if (!uploadedImage || !hasAgreed) return
+// ensure you have: import { track } from "@/lib/analytics-client"
 
-    if (isGuest) {
-      toast({ title: "Sign in required" })
-      signInWithGoogle("/upload")
-      return
-    }
-    if (isOutOfCredits) {
-      toast({ title: "No credits", description: "Buy credits to continue." })
-      window.location.href = "/credits"
-      return
-    }
+const finishOrRedirect = async (): Promise<void> => {
+  const t0 = performance.now();
 
-    // If we already have a Supabase URL, go straight to checkout
-    if (uploadedImageUrl) {
-      setShowCheckoutModal(true)
-      return
-    }
-
-    // Otherwise, upload to Supabase (this handles cases where upload failed initially or user was signed out)
-    setIsUploadingToDatabase(true)
-    setUploadError(null)
-    try {
-      const blob =
-        processedImageBlob ??
-        (await fetch(uploadedImage as string).then(r => r.blob()))
-      const { publicUrl } = await uploadToSupabase(blob)
-      setUploadedImageUrl(publicUrl)
-      // Update preview to use Supabase URL
-      setUploadedImage(publicUrl)
-      setShowCheckoutModal(true)
-    } catch (err: any) {
-      if (err?.message === 'no_credits') {
-        setUploadError('No credits remaining. Purchase credits to continue.')
-      } else {
-        setUploadError("Failed to upload image. Try again.")
-      }
-    } finally {
-      setIsUploadingToDatabase(false)
-    }
+  // block if required state missing
+  if (!uploadedImage || !hasAgreed) {
+    await track("upload", {
+      phase: "finalize_block",
+      reason: !uploadedImage ? "no_image" : "not_agreed",
+      level: "warn", // label it in props, not in the status slot
+    });
+    return;
   }
+
+  // auth gate
+  if (isGuest) {
+    await track("upload", { phase: "finalize_gate_guest" });
+    toast({ title: "Sign in required" });
+    signInWithGoogle("/upload");
+    return;
+  }
+
+  // credits gate
+  if (isOutOfCredits) {
+    await track("upload", { phase: "finalize_gate_no_credits" });
+    toast({ title: "No credits", description: "Buy credits to continue." });
+    window.location.href = "/credits";
+    return;
+  }
+
+  // already uploaded? open checkout
+  if (uploadedImageUrl) {
+    await track("upload", {
+      phase: "open_checkout",
+      from: "existing_url",
+      duration_ms: performance.now() - t0,
+    });
+    await track("buy", { event: "open_checkout", source: "upload_finalize_existing" });
+    setShowCheckoutModal(true);
+    return;
+  }
+
+  // upload now, then open checkout
+  setIsUploadingToDatabase(true);
+  setUploadError(null);
+
+  try {
+    // Make the blob definitively a Blob (not null)
+    const blob: Blob = processedImageBlob
+      ? processedImageBlob
+      : await fetch(uploadedImage as string).then((r) => r.blob());
+
+    await track("upload", {
+      phase: "uploading_from_finalize",
+      size: blob.size,
+      type: blob.type,
+    });
+
+    const { publicUrl } = await uploadToSupabase(blob, undefined, {
+      // uploads are paid; do not mark as AI generation
+      metadata: { is_ai_generation: false },
+    });
+
+    setUploadedImageUrl(publicUrl);
+    setUploadedImage(publicUrl);
+    setShowCheckoutModal(true);
+
+    await track("upload", {
+      phase: "uploaded_from_finalize",
+      hasUrl: !!publicUrl,
+      duration_ms: performance.now() - t0,
+    });
+    await track("buy", { event: "open_checkout", source: "upload_finalize_uploaded" });
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    await track("upload", { phase: "finalize_upload_error", msg }, "error");
+
+    if (err?.message === "no_credits") {
+      setUploadError("No credits remaining. Purchase credits to continue.");
+    } else {
+      setUploadError("Failed to upload image. Try again.");
+    }
+  } finally {
+    setIsUploadingToDatabase(false);
+  }
+};
+
 
   /* ─────────────────────────── tooltips ─────────────────────────────── */
   const handleMouseMove = useCallback((e: MouseEvent) => {
@@ -395,8 +481,8 @@ export default function UploadPage() {
                     <FlippableCardPreview 
                       artwork={uploadedImageUrl || (isUploading ? null : uploadedImage)} 
                       defaultImage="/example-card_cardify.webp"
-                      isLoading={isUploading || (uploadedImage && !uploadedImageUrl && !isGuest)}
-                      useSimpleLoader={true}
+                      isLoading={isUploading || (!!uploadedImage && !uploadedImageUrl && !isGuest)}
+                       useSimpleLoader={true}
                     />
                   </CardContent>
                 </Card>
@@ -484,12 +570,13 @@ export default function UploadPage() {
                     <p className="text-gray-400 text-sm">Hover to see the back of your card</p>
                   </CardHeader>
                   <CardContent>
-                    <FlippableCardPreview 
-                      artwork={uploadedImageUrl || (isUploading ? null : uploadedImage)} 
-                      defaultImage="/example-card_cardify.webp"
-                      isLoading={isUploading || (uploadedImage && !uploadedImageUrl && !isGuest)}
-                      useSimpleLoader={true}
-                    />
+                <FlippableCardPreview
+artwork={uploadedImageUrl || (isUploading ? null : uploadedImage)}
+  defaultImage="/example-card_cardify.webp"
+  isLoading={isUploading || (!!uploadedImage && !uploadedImageUrl && !isGuest)}
+  useSimpleLoader
+/>
+
                   </CardContent>
                 </Card>
               </div>
