@@ -1,4 +1,5 @@
 "use client";
+
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,8 +44,8 @@ import { uploadToSupabase } from "@/lib/supabase-storage";
 import { uploadTempReferenceImage, deleteTempReferenceImage } from "@/lib/supabase-temp-storage";
 
 import { cropImageToAspectRatio } from "@/lib/image-processing";
-import { track } from "@/lib/analytics-client"
 import { v4 as uuidv4 } from "uuid";
+import { track } from "@/lib/analytics-client"
 
 const DEVICE_STORAGE_KEY = "cardify.device_id";
 
