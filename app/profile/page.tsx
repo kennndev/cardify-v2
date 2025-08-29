@@ -39,6 +39,7 @@ type AssetRow = {
   id: string
   owner_id: string
   title: string | null
+  source_type: string | null
   image_url: string | null
   storage_path: string | null
   mime_type: string | null
@@ -55,11 +56,16 @@ type UIAsset = {
   mime_type: string | null
   uploaded_at: string | null
   public_url: string
+  source_type: string | null 
 }
 
 const toUI = (row: AssetRow): UIAsset => {
   const file_path = row.storage_path ?? row.title ?? ""
-  const file_name = (row.title && row.title.trim()) || file_path.split("/").pop() || "file"
+  const file_name =
+    (row.title && row.title.trim()) ||
+    file_path.split("/").pop() ||
+    "file"
+
   return {
     id: row.id,
     owner_id: row.owner_id,
@@ -69,9 +75,9 @@ const toUI = (row: AssetRow): UIAsset => {
     mime_type: row.mime_type ?? null,
     uploaded_at: row.created_at ?? null,
     public_url: row.image_url ?? "",
+    source_type: row.source_type ?? null,
   }
 }
-
 // inside your Profile component
 type SellerBalance = {
   connected: boolean
@@ -129,6 +135,19 @@ export default function Profile() {
     [assets]
   )
 
+  const uploads = useMemo(
+  () => assets.filter(a => a.source_type === "uploaded_image"),
+  [assets],
+)
+const generations = useMemo(
+  () => assets.filter(a => a.source_type !== "uploaded_image"),
+  [assets],
+)
+
+const uploadsMb     = useMemo(() => uploads.reduce((s, u) => s + (u.file_size ?? 0) / 1_048_576, 0), [uploads])
+const generationsMb = useMemo(() => generations.reduce((s, g) => s + (g.file_size ?? 0) / 1_048_576, 0), [generations])
+
+
   // Avatar
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
@@ -165,33 +184,10 @@ const [loadingPurchases, setLoadingPurchases] = useState<boolean>(true)
 const [sellerBal, setSellerBal] = useState<SellerBalance | null>(null)
 
 // ───────────────────────── Uploads (uploaded_images) state ────────────────
-const [uploads, setUploads]                     = useState<UIAsset[]>([])
 const [loadingUploads, setLoadingUploads]       = useState(true)
-const uploadsMb = useMemo(
-  () => uploads.reduce((s, u) => s + (u.file_size ?? 0) / (1024 * 1024), 0),
-  [uploads]
-)
+
 const [uploadsLightboxOpen, setUploadsLightboxOpen] = useState(false)
 const [uploadsLightboxIndex, setUploadsLightboxIndex] = useState(0)
-
-async function fetchUploads(userId: string) {
-  setLoadingUploads(true)
-  const { data, error } = await supabase
-    .from("uploaded_images")
-    .select(
-      "id         : id,          \
-       owner_id   : user_id,     \
-       title      : original_filename, \
-       image_url  : image_url,   \
-       storage_path, mime_type, size_bytes, created_at"
-    )
-    .eq("user_id", userId) // adjust if your column is owner_id
-    .order("created_at", { ascending: false })
-    .returns<AssetRow[]>()
-
-  setUploads(error ? [] : (data ?? []).map(toUI))
-  setLoadingUploads(false)
-}
 
 const openDeleteConfirm = (a: UIAsset) => {
   setTargetAsset(a)
@@ -290,8 +286,7 @@ const confirmDelete = async () => {
   // 2) fetch the assets the user has grants for
   const { data: rows, error: aErr } = await supabase
     .from("user_assets")
-    .select("id, owner_id, title, image_url, storage_path, mime_type, size_bytes, created_at")
-    .in("id", ids as string[])
+    .select("id, owner_id, source_type, title, image_url, storage_path, mime_type, size_bytes, created_at")    .in("id", ids as string[])
     .order("created_at", { ascending: false })
     .returns<AssetRow[]>()
 
