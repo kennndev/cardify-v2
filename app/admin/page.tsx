@@ -135,19 +135,25 @@ export default async function UsageDashboard() {
 
   /* ───────────────────────────── UI ───────────────────────────── */
   return (
-    <div className="min-h-screen bg-black text-white px-4 sm:px-6 py-10">
+    <div className="min-h-screen bg-black text-white px-6 sm:px-6 py-10">
       <div className="mx-auto max-w-6xl">
-        <h1 className="text-3xl font-bold tracking-wide mb-2">Usage Dashboard</h1>
+        <h1 className="text-3xl font-bold tracking-wide mb-2">
+          Usage Dashboard
+        </h1>
         <p className="text-sm text-gray-400 mb-8">
-          Window: last&nbsp;30 days • Source: <code>public.app_events</code> • UTC
+          Window: last&nbsp;30 days • Source: <code>public.app_events</code> •
+          UTC
         </p>
 
         {/* summary cards */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
           {cards.map(({ key, title, subtitle }) => {
-            const a = agg[key]
+            const a = agg[key];
             return (
-              <Card key={key} className="bg-zinc-900 border border-zinc-800 rounded-xl">
+              <Card
+                key={key}
+                className="bg-zinc-900 border border-zinc-800 rounded-xl"
+              >
                 <CardHeader className="pb-2">
                   <CardTitle>{title}</CardTitle>
                   <p className="text-xs text-gray-400">{subtitle}</p>
@@ -155,15 +161,25 @@ export default async function UsageDashboard() {
                 <CardContent className="space-y-3">
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-400">Events</span>
-                    <span className="text-2xl font-semibold">{fmt(a.total)}</span>
+                    <span className="text-2xl font-semibold text-gray-400">
+                      {fmt(a.total)}
+                    </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm text-gray-400">Unique signed-in users</span>
-                    <span className="text-lg">{fmt(a.uniqueUsers.size)}</span>
+                    <span className="text-sm text-gray-400">
+                      Unique signed-in users
+                    </span>
+                    <span className="text-lg text-gray-400">
+                      {fmt(a.uniqueUsers.size)}
+                    </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm text-gray-400">Unique guest devices</span>
-                    <span className="text-lg">{fmt(a.uniqueDevices.size)}</span>
+                    <span className="text-sm text-gray-400">
+                      Unique guest devices
+                    </span>
+                    <span className="text-lg text-gray-400">
+                      {fmt(a.uniqueDevices.size)}
+                    </span>
                   </div>
                   <div className="flex justify-between pt-1 border-t border-zinc-800">
                     <span className="text-xs text-gray-500">Last event</span>
@@ -173,21 +189,27 @@ export default async function UsageDashboard() {
                   </div>
                 </CardContent>
               </Card>
-            )
+            );
           })}
         </div>
 
         {/* daily table */}
         <Card className="bg-zinc-900 border border-zinc-800 rounded-xl">
           <CardHeader>
-            <CardTitle>Daily totals (last 14 days)</CardTitle>
+            <CardTitle className="text-gray-400">
+              Daily totals (last 14 days)
+            </CardTitle>
           </CardHeader>
           <CardContent className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-800">
-                  <th className="py-2 pr-4 text-left text-gray-400">Day (UTC)</th>
-                  <th className="py-2 pr-4 text-left text-gray-400">Generate</th>
+                  <th className="py-2 pr-4 text-left text-gray-400">
+                    Day (UTC)
+                  </th>
+                  <th className="py-2 pr-4 text-left text-gray-400">
+                    Generate
+                  </th>
                   <th className="py-2 pr-4 text-left text-gray-400">Upload</th>
                   <th className="py-2 pr-4 text-left text-gray-400">Buy</th>
                   <th className="py-2 pr-4 text-left text-gray-400">Total</th>
@@ -195,18 +217,20 @@ export default async function UsageDashboard() {
               </thead>
               <tbody>
                 {dayKeys.map((d) => {
-                  const g = daily.generate[d]
-                  const u = daily.upload[d]
-                  const b = daily.buy[d]
+                  const g = daily.generate[d];
+                  const u = daily.upload[d];
+                  const b = daily.buy[d];
                   return (
                     <tr key={d} className="border-b border-zinc-900">
                       <td className="py-2 pr-4 text-gray-300">{d}</td>
-                      <td className="py-2 pr-4">{g}</td>
-                      <td className="py-2 pr-4">{u}</td>
-                      <td className="py-2 pr-4">{b}</td>
-                      <td className="py-2 pr-4 font-semibold">{g + u + b}</td>
+                      <td className="py-2 pr-4 text-gray-300">{g}</td>
+                      <td className="py-2 pr-4 text-gray-300">{u}</td>
+                      <td className="py-2 pr-4 text-gray-300">{b}</td>
+                      <td className="py-2 pr-4 font-semibold text-gray-300">
+                        {g + u + b}
+                      </td>
                     </tr>
-                  )
+                  );
                 })}
               </tbody>
             </table>
@@ -217,17 +241,23 @@ export default async function UsageDashboard() {
         <div className="mt-8">
           <Card className="bg-zinc-900 border border-zinc-800 rounded-xl">
             <CardHeader>
-              <CardTitle className="text-base">Last 50 events (debug)</CardTitle>
+              <CardTitle className="text-base text-gray-400">
+                Last 50 events (debug)
+              </CardTitle>
             </CardHeader>
             <CardContent className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-zinc-800 text-gray-400">
-                    <th className="py-2 pr-3 text-left">TS</th>
-                    <th className="py-2 pr-3 text-left">Name</th>
-                    <th className="py-2 pr-3 text-left">User</th>
-                    <th className="py-2 pr-3 text-left">Device</th>
-                    <th className="py-2 pr-3 text-left">Action</th>
+                    <th className="py-2 pr-3 text-left text-gray-300">TS</th>
+                    <th className="py-2 pr-3 text-left text-gray-300">Name</th>
+                    <th className="py-2 pr-3 text-left text-gray-300">User</th>
+                    <th className="py-2 pr-3 text-left text-gray-300">
+                      Device
+                    </th>
+                    <th className="py-2 pr-3 text-left text-gray-300">
+                      Action
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -236,11 +266,17 @@ export default async function UsageDashboard() {
                       <td className="py-1 pr-3 text-gray-300">
                         {e.ts ? new Date(e.ts).toLocaleString() : "—"}
                       </td>
-                      <td className="py-1 pr-3">{e.name}</td>
-                      <td className="py-1 pr-3">{e.user_id ?? "—"}</td>
-                      <td className="py-1 pr-3">{e.device_id ?? "—"}</td>
-                      <td className="py-1 pr-3">
-                        {e.props?.action ?? Object.keys(e.props ?? {})[0] ?? "—"}
+                      <td className="py-1 pr-3 text-gray-300">{e.name}</td>
+                      <td className="py-1 pr-3 text-gray-300">
+                        {e.user_id ?? "—"}
+                      </td>
+                      <td className="py-1 pr-3 text-gray-300">
+                        {e.device_id ?? "—"}
+                      </td>
+                      <td className="py-1 pr-3 text-gray-300">
+                        {e.props?.action ??
+                          Object.keys(e.props ?? {})[0] ??
+                          "—"}
                       </td>
                     </tr>
                   ))}
@@ -251,9 +287,10 @@ export default async function UsageDashboard() {
         </div>
 
         <p className="text-xs text-gray-500 mt-4">
-          “Unique guest devices” uses <code>device_id</code> as a proxy for logged-out users.
+          “Unique guest devices” uses <code>device_id</code> as a proxy for
+          logged-out users.
         </p>
       </div>
     </div>
-  )
+  );
 }
