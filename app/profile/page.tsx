@@ -135,19 +135,6 @@ export default function Profile() {
     [assets]
   )
 
-  const uploads = useMemo(
-  () => assets.filter(a => a.source_type === "uploaded_image"),
-  [assets],
-)
-const generations = useMemo(
-  () => assets.filter(a => a.source_type !== "uploaded_image"),
-  [assets],
-)
-
-const uploadsMb     = useMemo(() => uploads.reduce((s, u) => s + (u.file_size ?? 0) / 1_048_576, 0), [uploads])
-const generationsMb = useMemo(() => generations.reduce((s, g) => s + (g.file_size ?? 0) / 1_048_576, 0), [generations])
-
-
   // Avatar
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
 
@@ -184,8 +171,6 @@ const [loadingPurchases, setLoadingPurchases] = useState<boolean>(true)
 const [sellerBal, setSellerBal] = useState<SellerBalance | null>(null)
 
 // ───────────────────────── Uploads (uploaded_images) state ────────────────
-const [loadingUploads, setLoadingUploads]       = useState(true)
-
 const [uploadsLightboxOpen, setUploadsLightboxOpen] = useState(false)
 const [uploadsLightboxIndex, setUploadsLightboxIndex] = useState(0)
 
@@ -370,29 +355,70 @@ useEffect(() => {
 }, [])
 
 
+  const uploads = useMemo(
+    () => assets.filter((a) => a.source_type === "uploaded_image"),
+    [assets],
+  )
+  const generations = useMemo(
+    () => assets.filter((a) => a.source_type !== "uploaded_image"),
+    [assets],
+  )
+
+  const uploadsMb = useMemo(
+    () =>
+      uploads.reduce(
+        (s, u) => s + (u.file_size ?? 0) / 1_048_576,
+        0,
+      ),
+    [uploads],
+  )
+  const generationsMb = useMemo(
+    () =>
+      generations.reduce(
+        (s, g) => s + (g.file_size ?? 0) / 1_048_576,
+        0,
+      ),
+    [generations],
+  )
+
+  /* no separate loading flag for uploads any more */
+  const loadingUploads = loadingAssets // ← changed
+
+  /* ───── fetchFirstPage / loadMore now SELECT source_type ───── */
   async function fetchFirstPage(userId: string) {
     setLoadingAssets(true)
-    setLoadError(null)
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("user_assets")
-      .select("id, owner_id, title, image_url, storage_path, mime_type, size_bytes, created_at")
+      .select(
+        "id, owner_id, source_type, title, image_url, storage_path, mime_type, size_bytes, created_at", // ← changed
+      )
       .eq("owner_id", userId)
       .order("created_at", { ascending: false })
       .range(0, PAGE_SIZE - 1)
       .returns<AssetRow[]>()
-    if (error) {
-      setLoadError(error.message)
-      setAssets([])
-      setHasMore(false)
-    } else {
-      const mapped = (data ?? []).map(toUI)
-      setAssets(mapped)
-      setOffset(mapped.length)
-      setHasMore((data?.length ?? 0) === PAGE_SIZE)
-      await fetchSellerListings(userId, mapped.map((a) => a.id))
-    }
+
+    setAssets((data ?? []).map(toUI))
     setLoadingAssets(false)
   }
+
+  const loadMore = useCallback(async () => {
+    if (!uid || loadingMore) return
+    setLoadingMore(true)
+
+    const { data } = await supabase
+      .from("user_assets")
+      .select(
+        "id, owner_id, source_type, title, image_url, storage_path, mime_type, size_bytes, created_at", // ← changed
+      )
+      .eq("owner_id", uid)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + PAGE_SIZE - 1)
+      .returns<AssetRow[]>()
+
+    if (data) setAssets((prev) => [...prev, ...data.map(toUI)])
+    setLoadingMore(false)
+  }, [uid, offset, loadingMore, supabase])
+
 
   const signInWithGoogle = async () => {
     const origin = window.location.origin
@@ -401,30 +427,6 @@ useEffect(() => {
       options: { redirectTo: `${origin}/auth/callback?next=${encodeURIComponent("/profile")}` },
     })
   }
-
-  const loadMore = useCallback(async () => {
-    if (!uid || loadingMore) return
-    setLoadingMore(true)
-    const from = offset, to = offset + PAGE_SIZE - 1
-    const { data, error } = await supabase
-      .from("user_assets")
-      .select("id, owner_id, title, image_url, storage_path, mime_type, size_bytes, created_at")
-      .eq("owner_id", uid)
-      .order("created_at", { ascending: false })
-      .range(from, to)
-      .returns<AssetRow[]>()
-    if (!error) {
-      const mapped = (data ?? []).map(toUI)
-      setAssets((prev) => {
-        const next = [...prev, ...mapped]
-        fetchSellerListings(uid, next.map((a) => a.id))
-        return next
-      })
-      setOffset((prev) => prev + mapped.length)
-      setHasMore(mapped.length === PAGE_SIZE)
-    }
-    setLoadingMore(false)
-  }, [uid, offset, supabase, loadingMore])
 
   useEffect(() => {
     if (!uid) return
@@ -834,11 +836,12 @@ return (
         <div className="flex items-end justify-between mb-4">
           <h2 className="text-2xl font-bold text-white tracking-wider">Uploads</h2>
           <div className="text-xs text-gray-400">
-            {uploads.length > 0 && (
-              <span>
-                {uploads.length} file{uploads.length > 1 ? "s" : ""} • {uploadsMb.toFixed(2)} MB total
-              </span>
-            )}
+        {uploads.length > 0 && (
+          <span>
+            {uploads.length} file{uploads.length > 1 && "s"} •{" "}
+            {uploadsMb.toFixed(2)} MB
+          </span>
+        )}
           </div>
         </div>
 
@@ -901,99 +904,112 @@ return (
       </section>
 
       {/* ───────────────────────── My Generations (user_assets) ───────────────────────── */}
-      <section className="mb-14">
-        <div className="flex items-end justify-between mb-4">
-          <h2 className="text-2xl font-bold text-white tracking-wider">My Generations</h2>
-          <div className="text-xs text-gray-400">
-            {assets.length > 0 && (
-              <span>
-                {assets.length} card{assets.length > 1 ? "s" : ""} • {totalMb.toFixed(2)} MB total
-              </span>
-            )}
+   <section className="mb-14">
+  <div className="flex items-end justify-between mb-4">
+    <h2 className="text-2xl font-bold text-white tracking-wider">My Generations</h2>
+    <div className="text-xs text-gray-400">
+      {generations.length > 0 && (
+        <span>
+          {generations.length} card{generations.length > 1 && "s"} •{" "}
+          {generationsMb.toFixed(2)} MB
+        </span>
+      )}
+    </div>
+  </div>
+
+  {/* loading placeholders */}
+  {loadingAssets ? (
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+      {Array.from({ length: 10 }).map((_, i) => (
+        <div
+          key={i}
+          className="bg-cyber-dark/60 border border-cyber-cyan/30 rounded-lg p-3 animate-pulse"
+        >
+          <div className="relative aspect-[5/7] bg-gradient-to-br from-cyber-dark/40 to-cyber-dark/80 rounded-lg border-2 border-cyber-cyan/20" />
+          <div className="mt-3 space-y-2">
+            <div className="h-4 bg-cyber-cyan/10 rounded" />
+            <div className="flex justify-between items-center">
+              <div className="h-4 w-16 bg-cyber-green/10 rounded" />
+              <div className="w-8 h-8 rounded-full bg-cyber-cyan/10" />
+            </div>
+          </div>
+          <div className="mt-3 space-y-2">
+            <div className="flex gap-2">
+              <div className="flex-1 h-8 bg-cyber-cyan/10 rounded" />
+              <div className="w-8 h-8 bg-cyber-cyan/10 rounded" />
+            </div>
+            <div className="h-8 bg-cyber-cyan/10 rounded" />
           </div>
         </div>
-
-        {loadingAssets ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-            {Array.from({ length: 10 }).map((_, i) => (
-              <div
-                key={i}
-                className="bg-cyber-dark/60 border border-cyber-cyan/30 rounded-lg p-3 animate-pulse"
-              >
-                <div className="relative aspect-[5/7] bg-gradient-to-br from-cyber-dark/40 to-cyber-dark/80 rounded-lg border-2 border-cyber-cyan/20" />
-                <div className="mt-3 space-y-2">
-                  <div className="h-4 bg-cyber-cyan/10 rounded" />
-                  <div className="flex justify-between items-center">
-                    <div className="h-4 w-16 bg-cyber-green/10 rounded" />
-                    <div className="w-8 h-8 rounded-full bg-cyber-cyan/10" />
-                  </div>
-                </div>
-                <div className="mt-3 space-y-2">
-                  <div className="flex gap-2">
-                    <div className="flex-1 h-8 bg-cyber-cyan/10 rounded" />
-                    <div className="w-8 h-8 bg-cyber-cyan/10 rounded" />
-                  </div>
-                  <div className="h-8 bg-cyber-cyan/10 rounded" />
-                </div>
-              </div>
-            ))}
+      ))}
+    </div>
+  ) : !uid ? (
+    <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
+      <CardContent className="p-6 text-gray-400">
+        Sign in to view your generations.
+      </CardContent>
+    </Card>
+  ) : generations.length === 0 ? (
+    <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
+      <CardContent className="p-6 text-center text-gray-400">
+        {loadError ? (
+          <div className="text-cyber-orange">
+            Failed to load generations: {loadError}
           </div>
-        ) : !uid ? (
-          <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
-            <CardContent className="p-6 text-gray-400">Sign in to view your generations.</CardContent>
-          </Card>
-        ) : assets.length === 0 ? (
-          <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
-            <CardContent className="p-6 text-center text-gray-400">
-              {loadError ? (
-                <div className="text-cyber-orange">Failed to load generations: {loadError}</div>
-              ) : (
-                <>
-                  No AI generations yet.
-                  <div className="text-xs text-gray-500 mt-2">
-                    Active user id: <span className="text-cyber-cyan">{uid ?? "—"}</span>
-                  </div>
-                  <Link href="/generate" className="ml-2 text-cyber-cyan hover:text-cyber-pink underline">
-                    Create one
-                  </Link>
-                </>
-              )}
-            </CardContent>
-          </Card>
         ) : (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-              {assets.map((a, index) => {
-                const existing = listingBySource[a.id]
-                const listed = !!existing && existing.is_active && existing.status === "listed"
-                return (
-                  <Card
-                    key={a.id}
-                    className="bg-cyber-dark/60 border border-cyber-cyan/30 hover:border-cyber-cyan/60 transition-all duration-300 overflow-hidden hover:shadow-[0_0_30px_rgba(34,211,238,0.3)]"
-                  >
-                    <CardContent className="p-3">
-                      <button
-                        onClick={() => {
-                          setLightboxIndex(index)
-                          setLightboxOpen(true)
-                        }}
-                        className="block relative aspect-[5/7] bg-gradient-to-br from-cyber-dark/40 to-cyber-dark/80 rounded-lg overflow-hidden cursor-pointer group w-full border-2 border-cyber-cyan/50 transition-all duration-300 hover:border-cyber-cyan"
-                      >
-                        <Image
-                          src={a.public_url || PLACEHOLDER}
-                          alt={a.file_name}
-                          fill
-                          sizes="(max-width: 640px) 100vw, (max-width: 768px) 50vw, (max-width: 1024px) 33vw, 20vw"
-                          className="object-fill"
-                          priority={index < 6}
-                          onError={(e) => ((e.currentTarget as HTMLImageElement).src = PLACEHOLDER)}
-                        />
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <span className="text-cyber-cyan text-lg font-bold tracking-wider opacity-0 group-hover:opacity-100 transition-all duration-300 transform scale-90 group-hover:scale-100">
-                            VIEW
-                          </span>
-                        </div>
-                      </button>
+            No AI generations yet.
+            <div className="text-xs text-gray-500 mt-2">
+              Active user id: <span className="text-cyber-cyan">{uid ?? "—"}</span>
+            </div>
+            <Link
+              href="/generate"
+              className="ml-2 text-cyber-cyan hover:text-cyber-pink underline"
+            >
+              Create one
+            </Link>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  ) : (
+    <>
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+        {generations.map((a, index) => {
+          const existing = listingBySource[a.id]
+          const listed = !!existing && existing.is_active && existing.status === "listed"
+          return (
+            <Card
+              key={a.id}
+              className="bg-cyber-dark/60 border border-cyber-cyan/30 hover:border-cyber-cyan/60 transition-all duration-300 overflow-hidden hover:shadow-[0_0_30px_rgba(34,211,238,0.3)]"
+            >
+              <CardContent className="p-3">
+                {/* thumbnail */}
+                <button
+                  onClick={() => {
+                    setLightboxIndex(index)
+                    setLightboxOpen(true)
+                  }}
+                  className="block relative aspect-[5/7] bg-gradient-to-br from-cyber-dark/40 to-cyber-dark/80 rounded-lg overflow-hidden cursor-pointer group w-full border-2 border-cyber-cyan/50 transition-all duration-300 hover:border-cyber-cyan"
+                  title={a.file_name}
+                >
+                  <Image
+                    src={a.public_url || PLACEHOLDER}
+                    alt={a.file_name}
+                    fill
+                    sizes="(max-width: 640px) 100vw, (max-width: 768px) 50vw, (max-width: 1024px) 33vw, 20vw"
+                    className="object-fill"
+                    priority={index < 6}
+                    onError={(e) =>
+                      ((e.currentTarget as HTMLImageElement).src = PLACEHOLDER)
+                    }
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <span className="text-cyber-cyan text-lg font-bold tracking-wider opacity-0 group-hover:opacity-100 transition-all duration-300 transform scale-90 group-hover:scale-100">
+                      VIEW
+                    </span>
+                  </div>
+                </button>
 
                       <div className="mt-3 space-y-1">
                         {renameId === a.id ? (
