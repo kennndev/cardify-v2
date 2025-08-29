@@ -155,9 +155,17 @@ const handleFileUpload = useCallback(async (file: File) => {
     // 3) Authenticated: upload and let the DB trigger bill a paid credit.
     //    IMPORTANT: Do NOT mark as AI generation here (uploads don't get free gens).
     try {
-      const { publicUrl } = await uploadToSupabase(processedBlob, undefined, {
-        metadata: { is_ai_generation: false },
-      })
+      const { publicUrl } = await uploadToSupabase(
+        processedBlob,
+        undefined,
+        {
+          /* 👇 NEW: make the row unambiguously an *upload* */
+          metadata: {
+            is_ai_generation: false,
+            source_type:      "uploaded_image",   // <── added
+          },
+        },
+      );
 
       setUploadedImageUrl(publicUrl)
       setUploadedImage(publicUrl)
@@ -279,15 +287,22 @@ const finishOrRedirect = async (): Promise<void> => {
       ? processedImageBlob
       : await fetch(uploadedImage as string).then((r) => r.blob());
 
+    const { publicUrl } = await uploadToSupabase(
+      blob,
+      undefined,
+      {
+        /* 👇 SAME one-liner here */
+        metadata: {
+          is_ai_generation: false,
+          source_type:      "uploaded_image",   // <── added
+        },
+      },
+    );
+
     await track("upload", {
       phase: "uploading_from_finalize",
       size: blob.size,
       type: blob.type,
-    });
-
-    const { publicUrl } = await uploadToSupabase(blob, undefined, {
-      // uploads are paid; do not mark as AI generation
-      metadata: { is_ai_generation: false },
     });
 
     setUploadedImageUrl(publicUrl);
