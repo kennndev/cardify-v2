@@ -698,17 +698,17 @@ return (
       {/* Earnings & Balance */}
 {uid && sellerBal && (
   <div className="mb-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
-    {/* 1) Live Stripe balance (only shows for Express/Custom; otherwise "—") */}
+    {/* 1) Stripe balance */}
     <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
       <CardContent className="p-4">
-        <div className="text-xs text-gray-400 mb-1">Stripe Balance (available)</div>
+        <div className="text-xs text-gray-400 mb-1">Available to withdraw</div>
         <div className="text-2xl font-bold text-white">
           {sellerBal.stripeBalance?.available
             ? fmt(sellerBal.stripeBalance.available.USD ?? 0, "USD")
             : "—"}
         </div>
         <div className="text-xs text-gray-500 mt-1">
-          Pending:{" "}
+          Waiting to settle:{" "}
           {sellerBal.stripeBalance?.pending
             ? fmt(sellerBal.stripeBalance.pending.USD ?? 0, "USD")
             : "—"}
@@ -716,34 +716,35 @@ return (
       </CardContent>
     </Card>
 
-    {/* 2) Lifetime net earned (your DB) */}
+    {/* 2) Lifetime earnings */}
     <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
       <CardContent className="p-4">
-        <div className="text-xs text-gray-400 mb-1">Lifetime Net</div>
+        <div className="text-xs text-gray-400 mb-1">Total earnings</div>
         <div className="text-2xl font-bold text-white">
           {fmt(sellerBal.totals?.USD?.net ?? 0, "USD")}
         </div>
         <div className="text-xs text-gray-500 mt-1">
-          Completed: {fmt(sellerBal.totals?.USD?.net_completed ?? 0, "USD")}
+          Paid so far: {fmt(sellerBal.totals?.USD?.net_completed ?? 0, "USD")}
         </div>
       </CardContent>
     </Card>
 
-    {/* 3) Not yet completed (your DB view of “pending”) */}
+    {/* 3) Earnings on the way */}
     <Card className="bg-cyber-dark/60 border border-cyber-cyan/30">
       <CardContent className="p-4">
-        <div className="text-xs text-gray-400 mb-1">Net Pending</div>
+        <div className="text-xs text-gray-400 mb-1">Earnings on the way</div>
         <div className="text-2xl font-bold text-white">
           {fmt(sellerBal.totals?.USD?.net_pending ?? 0, "USD")}
         </div>
         <div className="text-xs text-gray-500 mt-1">
-          Gross: {fmt(sellerBal.totals?.USD?.gross ?? 0, "USD")} • Fees:{" "}
+          From gross {fmt(sellerBal.totals?.USD?.gross ?? 0, "USD")} − platform fees{" "}
           {fmt(sellerBal.totals?.USD?.fee ?? 0, "USD")}
         </div>
       </CardContent>
     </Card>
   </div>
 )}
+
 
 
       {/* Header with Create Button */}
