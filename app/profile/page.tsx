@@ -888,118 +888,173 @@ return (
           </Card>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-         {uploads.map((u, index) => (
-  <Card
-    key={`upload-${u.id}`}
-    className="bg-cyber-dark/60 border border-cyber-cyan/30 hover:border-cyber-cyan/60 transition-all duration-300 overflow-hidden"
-  >
-    <CardContent className="p-3">
-      {/* thumbnail */}
-      <button
-        onClick={() => {
-          setUploadsLightboxIndex(index)
-          setUploadsLightboxOpen(true)
-        }}
-        className="block relative aspect-[5/7] bg-gradient-to-br from-cyber-dark/40 to-cyber-dark/80 rounded-lg overflow-hidden cursor-pointer group w-full border-2 border-cyber-cyan/50 transition-all duration-300 hover:border-cyber-cyan"
-        title={u.file_name}
-      >
-        <Image
-          src={u.public_url || PLACEHOLDER}
-          alt={u.file_name}
-          fill
-          sizes="(max-width: 640px) 100vw, (max-width: 768px) 50vw, (max-width: 1024px) 33vw, 20vw"
-          className="object-fill"
-          onError={(e) => ((e.currentTarget as HTMLImageElement).src = PLACEHOLDER)}
-        />
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <span className="text-cyber-cyan text-sm font-bold tracking-wider opacity-0 group-hover:opacity-100 transition-all duration-300">
-            VIEW
-          </span>
-        </div>
-      </button>
+{uploads.map((u, index) => {
+  const existing = listingBySource[u.id]
+  const listed = !!existing && existing.is_active && existing.status === "listed"
 
-      {/* title + rename */}
-      <div className="mt-3 space-y-1">
-        {renameId === u.id ? (
-          <div className="flex items-center gap-1">
-            <Input
-              value={draftTitle}
-              onChange={(e) => setDraftTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") renameAsset(u.id, draftTitle)
-                else if (e.key === "Escape") {
+  return (
+    <Card
+      key={`upload-${u.id}`}
+      className="bg-cyber-dark/60 border border-cyber-cyan/30 hover:border-cyber-cyan/60 transition-all duration-300 overflow-hidden"
+    >
+      <CardContent className="p-3">
+        {/* thumbnail */}
+        <button
+          onClick={() => {
+            setUploadsLightboxIndex(index)
+            setUploadsLightboxOpen(true)
+          }}
+          className="block relative aspect-[5/7] bg-gradient-to-br from-cyber-dark/40 to-cyber-dark/80 rounded-lg overflow-hidden cursor-pointer group w-full border-2 border-cyber-cyan/50 transition-all duration-300 hover:border-cyber-cyan"
+          title={u.file_name}
+        >
+          <Image
+            src={u.public_url || PLACEHOLDER}
+            alt={u.file_name}
+            fill
+            sizes="(max-width: 640px) 100vw, (max-width: 768px) 50vw, (max-width: 1024px) 33vw, 20vw"
+            className="object-fill"
+            onError={(e) => ((e.currentTarget as HTMLImageElement).src = PLACEHOLDER)}
+          />
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <span className="text-cyber-cyan text-sm font-bold tracking-wider opacity-0 group-hover:opacity-100 transition-all duration-300">
+              VIEW
+            </span>
+          </div>
+        </button>
+
+        {/* title + rename */}
+        <div className="mt-3 space-y-1">
+          {renameId === u.id ? (
+            <div className="flex items-center gap-1">
+              <Input
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") renameAsset(u.id, draftTitle)
+                  else if (e.key === "Escape") {
+                    setRenameId(null)
+                    setDraftTitle("")
+                  }
+                }}
+                className="h-7 text-xs bg-cyber-dark/60 border-cyber-cyan/50 text-white px-2 flex-1"
+                autoFocus
+                placeholder="Enter name"
+              />
+              <Button
+                size="icon"
+                className="h-7 w-7 min-w-[1.75rem] border-2 border-cyber-cyan bg-cyber-dark/60 text-cyber-cyan hover:bg-cyber-cyan/10 flex-shrink-0"
+                onClick={() => renameAsset(u.id, draftTitle)}
+                disabled={renamingId === u.id}
+                title="Save"
+              >
+                <Check className="h-4 w-4" />
+              </Button>
+              <Button
+                size="icon"
+                className="h-7 w-7 min-w-[1.75rem] border-2 border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-400 flex-shrink-0"
+                onClick={() => {
                   setRenameId(null)
                   setDraftTitle("")
-                }
-              }}
-              className="h-7 text-xs bg-cyber-dark/60 border-cyber-cyan/50 text-white px-2 flex-1"
-              autoFocus
-              placeholder="Enter name"
-            />
-            <Button
-              size="icon"
-              className="h-7 w-7 min-w-[1.75rem] border-2 border-cyber-cyan bg-cyber-dark/60 text-cyber-cyan hover:bg-cyber-cyan/10 flex-shrink-0"
-              onClick={() => renameAsset(u.id, draftTitle)}
-              disabled={renamingId === u.id}
-              title="Save"
-            >
-              <Check className="h-4 w-4" />
-            </Button>
-            <Button
-              size="icon"
-              className="h-7 w-7 min-w-[1.75rem] border-2 border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-400 flex-shrink-0"
-              onClick={() => {
-                setRenameId(null)
-                setDraftTitle("")
-              }}
-              disabled={renamingId === u.id}
-              title="Cancel"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-1 group/title">
-            <h3 className="text-sm font-semibold text-white truncate flex-1" title={u.file_name}>
-              {u.file_name}
-            </h3>
-            <Button
-              size="icon"
-              className="h-7 w-7 min-w-[1.75rem] border border-cyber-cyan/30 bg-cyber-dark/60 hover:bg-white/5 opacity-0 group-hover/title:opacity-100 transition-opacity flex-shrink-0"
-              onClick={() => {
-                setRenameId(u.id)
-                setDraftTitle(u.file_name)
-              }}
-              title="Rename"
-            >
-              <Pencil className="h-4 w-4 text-cyber-cyan/70" />
-            </Button>
-          </div>
-        )}
+                }}
+                disabled={renamingId === u.id}
+                title="Cancel"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 group/title">
+              <h3 className="text-sm font-semibold text-white truncate flex-1" title={u.file_name}>
+                {u.file_name}
+              </h3>
+              <Button
+                size="icon"
+                className="h-7 w-7 min-w-[1.75rem] border border-cyber-cyan/30 bg-cyber-dark/60 hover:bg-white/5 opacity-0 group-hover/title:opacity-100 transition-opacity flex-shrink-0"
+                onClick={() => {
+                  setRenameId(u.id)
+                  setDraftTitle(u.file_name)
+                }}
+                title="Rename"
+              >
+                <Pencil className="h-4 w-4 text-cyber-cyan/70" />
+              </Button>
+            </div>
+          )}
 
-        <div className="flex items-center justify-between text-xs text-gray-400">
-          <span>{((u.file_size ?? 0) / (1024 * 1024)).toFixed(1)} MB</span>
-          {/* delete */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="border border-red-500/30 hover:bg-red-500/10 h-7 w-7"
-            title="Delete"
-            onClick={() => openDeleteConfirm(u)}
-            disabled={deletingId === u.id}
-            aria-label="Delete"
-          >
-            {deletingId === u.id ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Trash2 className="h-3 w-3 text-red-400" />
+          <div className="flex items-center justify-between text-xs text-gray-400">
+            <span>{((u.file_size ?? 0) / (1024 * 1024)).toFixed(1)} MB</span>
+            {listed && (
+              <Badge className="bg-green-500/15 border-0 text-green-400 text-xs px-2 py-0">
+                ${((existing!.price_cents ?? 0) / 100).toFixed(0)}
+              </Badge>
             )}
-          </Button>
+          </div>
         </div>
-      </div>
-    </CardContent>
-  </Card>
-))}
+
+        {/* actions: sell/buy/delete */}
+        <div className="mt-3 space-y-2">
+          {listed ? (
+            <>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => cancelListing(existing!)}
+                disabled={canceling === existing!.id}
+                className="w-full text-xs h-8"
+              >
+                {canceling === existing!.id ? "..." : "Unlist"}
+              </Button>
+              <Button
+                className="cyber-button w-full text-xs h-8"
+                size="sm"
+                onClick={() => openCheckoutModal(u)}
+              >
+                <Package className="h-3 w-3 mr-1" />
+                Buy Physical
+              </Button>
+            </>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <Button
+                  className="bg-cyber-dark border-2 border-cyber-green text-cyber-green hover:bg-cyber-green/10 flex-1 text-xs h-8"
+                  size="sm"
+                  onClick={() => openSell(u)}
+                >
+                  Sell
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="border border-red-500/30 hover:bg-red-500/10 h-8 w-8"
+                  title="Delete"
+                  onClick={() => openDeleteConfirm(u)}
+                  disabled={deletingId === u.id}
+                  aria-label="Delete"
+                >
+                  {deletingId === u.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3 w-3 text-red-400" />
+                  )}
+                </Button>
+              </div>
+              <Button
+                className="cyber-button w-full text-xs h-8"
+                size="sm"
+                onClick={() => openCheckoutModal(u)}
+              >
+                <Package className="h-3 w-3 mr-1" />
+                Buy Physical
+              </Button>
+            </>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  )
+})}
+
 
           </div>
         )}
