@@ -257,7 +257,7 @@ const confirmDelete = async () => {
     setListingBySource(map)
   }
 
-  async function fetchPurchases(userId: string) {
+async function fetchPurchases(userId: string) {
   setLoadingPurchases(true)
 
   // 1) get purchased asset ids (grants)
@@ -272,26 +272,33 @@ const confirmDelete = async () => {
     return
   }
 
-const SELECT_COLUMNS = `
-  id, owner_id, source_type, title, image_url, storage_path,
-  mime_type, size_bytes, created_at, metadata  
-`;
-
   const ids = grants.map(g => g.asset_id).filter(Boolean)
+  if (ids.length === 0) {
+    setPurchases([])
+    setLoadingPurchases(false)
+    return
+  }
+
   // 2) fetch the assets the user has grants for
   const { data: rows, error: aErr } = await supabase
     .from("user_assets")
-.select(SELECT_COLUMNS) 
-     .order("created_at", { ascending: false })
+    .select(`
+      id, owner_id, source_type, title, image_url, storage_path,
+      mime_type, size_bytes, created_at, metadata
+    `)
+    .in("id", ids)   // 👈 filter to only purchased assets
+    .order("created_at", { ascending: false })
     .returns<AssetRow[]>()
 
   if (aErr) {
+    console.error("fetchPurchases error", aErr.message)
     setPurchases([])
   } else {
     setPurchases((rows ?? []).map(toUI))
   }
   setLoadingPurchases(false)
 }
+
 
 useEffect(() => {
   let mounted = true
